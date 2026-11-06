@@ -1,129 +1,290 @@
 
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>REVEL TradeGuard</title>
 <style>
+:root {
+  color-scheme:dark;
+  --bg:#0c1420;
+  --panel:#192637;
+  --line:#354458;
+  --muted:#a4b2c4;
+  --gold:#e8c27a;
+  --green:#5bd6a1;
+  --red:#ff8585;
+}
 *{box-sizing:border-box}
-body{margin:0;background:#0c1420;color:#edf2f8;font:15px Arial,sans-serif}
-main{max-width:650px;margin:auto;padding:18px}
-h1{color:#e8c27a;font-size:22px}
-h2{font-size:17px;margin:0 0 14px}
-header{display:flex;align-items:center;justify-content:space-between}
-.card{background:#192637;border-radius:14px;padding:18px;margin:14px 0}
-.value{font-size:34px;font-weight:bold;margin:12px 0}
-.muted,small{color:#a4b2c4}
-.green{color:#5bd6a1}
-.red{color:#ff8585}
-.gold{color:#e8c27a}
-.row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #344153}
-input,select{width:100%;padding:12px;margin:7px 0;background:#0c1420;border:1px solid #40516a;border-radius:8px;color:white;font-size:16px}
-button{background:#e8c27a;color:#101824;border:0;border-radius:9px;padding:12px;font-weight:bold;margin-top:8px}
-button:disabled{opacity:.4}
+body{
+  margin:0;background:var(--bg);color:#edf2f8;
+  font:15px system-ui,-apple-system,Arial,sans-serif;
+}
+main{max-width:760px;margin:auto;padding:18px}
+header{
+  display:flex;justify-content:space-between;
+  align-items:center;gap:10px;
+}
+h1{font-size:21px;color:var(--gold);margin:14px 0}
+h2{font-size:17px;margin:0 0 13px}
+.badge{
+  font-size:11px;color:var(--gold);
+  border:1px solid var(--gold);
+  padding:6px;border-radius:8px;
+}
+.card{
+  background:var(--panel);padding:17px;
+  border-radius:14px;margin:13px 0;
+}
+.muted,small,.note{color:var(--muted)}
+.value{font-size:35px;font-weight:750;margin:8px 0}
+.green{color:var(--green)}
+.red{color:var(--red)}
+.row{
+  display:flex;justify-content:space-between;
+  gap:12px;align-items:center;padding:12px 0;
+  border-bottom:1px solid var(--line);
+}
+.row:last-child{border-bottom:0}
+.tabs{
+  display:flex;gap:7px;overflow-x:auto;
+  padding:10px 0;
+}
+.tabs button{flex:0 0 auto}
+.tabs button.active{
+  background:var(--gold);color:#101824;
+}
+button{
+  border:1px solid var(--line);
+  background:#253449;color:#edf2f8;
+  padding:11px 13px;border-radius:9px;
+  font:inherit;font-weight:650;cursor:pointer;
+}
+button.primary{
+  background:var(--gold);color:#101824;border:0;
+}
+input,select{
+  display:block;width:100%;font:inherit;
+  padding:12px;background:#0c1420;
+  border:1px solid #53627a;color:white;
+  border-radius:9px;margin:8px 0;
+}
+label{
+  display:block;font-size:12px;
+  color:var(--muted);margin-top:12px;
+}
 .full{width:100%}
-.notice{background:#293341;padding:12px;border-radius:9px;color:#d9e3ef;font-size:13px;line-height:1.5}
-footer{font-size:12px;color:#a4b2c4;line-height:1.6;margin:25px 0}
-svg{width:100%;height:auto}
+.grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:10px;
+}
+.stat{
+  background:#142031;border-radius:10px;padding:12px;
+}
+.stat strong{
+  display:block;margin-top:7px;font-size:19px;
+}
+.note{font-size:12px;line-height:1.6}
+.warning{
+  background:#302b24;border:1px solid #62523b;
+  padding:12px;border-radius:10px;
+}
+.chart{width:100%;height:160px}
+.hidden{display:none!important}
+.history{max-height:330px;overflow:auto}
+.stockname{
+  font-size:12px;color:var(--muted);margin-top:3px;
+}
+footer{
+  margin:22px 0;color:var(--muted);
+  font-size:12px;line-height:1.6;
+}
 </style>
 </head>
 <body>
 <main>
+
 <header>
 <h1>REVEL / TRADEGUARD</h1>
-<small class="gold">PAPER TRADING</small>
+<span class="badge">PAPER TRADING</span>
 </header>
 
-<div class="card">
-<small>Virtual Portfolio Equity</small>
+<nav id="tabs" class="tabs"></nav>
+
+<section class="card">
+<small>TOTAL PORTFOLIO EQUITY</small>
 <div class="value" id="equity">A$5,000.00</div>
-<div id="profit">A$0.00 (0.00%)</div>
-<div class="row">
-<span>Available cash</span>
+<strong id="totalPL">A$0.00 (0.00%)</strong>
+<div class="grid" style="margin-top:15px">
+<div class="stat">
+<small>Available cash</small>
 <strong id="cash">A$5,000.00</strong>
 </div>
-<div class="row">
-<span>Open positions</span>
-<strong id="count">0</strong>
+<div class="stat">
+<small>Open positions</small>
+<strong id="openCount">0</strong>
 </div>
+</div>
+</section>
+
+<section id="allPanel">
+<div class="card">
+<h2>All Stocks</h2>
+<div id="allStocks"></div>
 </div>
 
 <div class="card">
 <h2>Portfolio Performance</h2>
-<svg id="chart" viewBox="0 0 340 140"></svg>
-<p class="muted" id="chartStatus">No recorded valuations yet.</p>
+<svg class="chart" id="chart"
+ viewBox="0 0 340 160"></svg>
+<div id="chartLabel" class="note">
+No recorded valuations yet.
+</div>
 </div>
 
 <div class="card">
-<h2>Current Holdings</h2>
-<div id="holdings" class="muted">No positions opened.</div>
+<h2>Trading Activity</h2>
+<div id="allHistory" class="history note">
+No trades recorded.
+</div>
+</div>
+</section>
+
+<section id="stockPanel" class="hidden">
+<div class="card">
+<h2 id="stockTitle"></h2>
+<div class="row">
+<span>Last recorded price</span>
+<strong id="stockPrice">Awaiting price</strong>
+</div>
+<div class="row">
+<span>Price source</span>
+<span class="note" id="stockSource">Not connected</span>
+</div>
+<div class="row">
+<span>Shares held</span>
+<strong id="stockShares">0</strong>
+</div>
+<div class="row">
+<span>Position value</span>
+<strong id="stockValue">A$0.00</strong>
+</div>
+<div class="row">
+<span>Stock profit / loss</span>
+<strong id="stockPL">A$0.00</strong>
+</div>
 </div>
 
 <div class="card">
-<h2>Record Market Price</h2>
-<select id="priceSymbol">
-<option value="RTX">RTX</option>
-<option value="GD">General Dynamics</option>
-<option value="LMT">Lockheed Martin</option>
-<option value="BA.L">BAE Systems</option>
-<option value="NOC">Northrop Grumman</option>
-</select>
-<input id="marketPrice" type="number" min="0.0001" step="any" placeholder="Verified price in A$">
-<input id="priceSource" placeholder="Price source and timestamp">
-<button class="full" onclick="recordPrice()">Record Verified Price</button>
-<p class="muted">Enter an AUD-equivalent share price, including currency conversion where needed. This is manual, not a live feed.</p>
+<h2>Record Verified Price</h2>
+<p class="note">
+Enter an AUD-equivalent share price.
+Include currency conversion for overseas stocks.
+Prices are entered manually.
+</p>
+<label>Price per share (A$)</label>
+<input id="priceInput" type="number"
+ min="0.000001" step="any"
+ placeholder="Price in AUD">
+<label>Source and market timestamp</label>
+<input id="sourceInput"
+ placeholder="Exchange, date, time and FX source">
+<button class="primary full" id="savePrice">
+Record Price
+</button>
 </div>
 
 <div class="card">
 <h2>Paper Trading Desk</h2>
-<select id="tradeSymbol">
-<option value="RTX">RTX</option>
-<option value="GD">General Dynamics</option>
-<option value="LMT">Lockheed Martin</option>
-<option value="BA.L">BAE Systems</option>
-<option value="NOC">Northrop Grumman</option>
-</select>
+<label>Action</label>
 <select id="side">
-<option value="BUY">BUY</option>
-<option value="SELL">SELL</option>
+<option value="BUY">Buy</option>
+<option value="SELL">Sell</option>
 </select>
-<input id="quantity" type="number" min="0.000001" step="any" placeholder="Number of shares">
-<input id="reason" placeholder="Reason for trade">
-<button class="full" onclick="trade()">Record Paper Trade</button>
-<p class="muted">Trades use the most recently recorded price for the selected stock. They are not brokerage executions.</p>
+<label>Shares</label>
+<input id="qty" type="number"
+ min="0.000001" step="any"
+ placeholder="Quantity">
+<label>Reason for decision</label>
+<input id="reason" placeholder="Trade rationale">
+<button class="primary full" id="submitTrade">
+Record Paper Trade
+</button>
+<p class="note">
+Trades use the last recorded price.
+Fills are simulated, not actual exchange executions.
+Fees are assumed to be A$0.
+</p>
 </div>
 
 <div class="card">
-<h2>Trade History</h2>
-<div id="history" class="muted">No trades recorded.</div>
+<h2>Stock Trade History</h2>
+<div id="stockHistory" class="history note">
+No trades recorded.
+</div>
+</div>
+</section>
+
+<div class="card">
+<h2>Risk Rules</h2>
+<div class="row">
+<span>Maximum stock exposure</span><strong>20%</strong>
+</div>
+<div class="row">
+<span>Minimum cash reserve</span><strong>30%</strong>
+</div>
+<div class="row">
+<span>Pause new buys at drawdown</span><strong>5%</strong>
+</div>
+<div class="row">
+<span>Emergency halt</span><strong>8%</strong>
+</div>
+</div>
+
+<div id="message" class="warning note">
+Waiting for recorded prices and trades.
 </div>
 
 <div class="card">
-<h2>Risk Controls</h2>
-<div class="row"><span>Maximum position</span><strong>20%</strong></div>
-<div class="row"><span>Minimum cash reserve</span><strong>30%</strong></div>
-<div class="row"><span>Pause new buys</span><strong>5% drawdown</strong></div>
-<div class="row"><span>Emergency halt</span><strong>8% drawdown</strong></div>
-</div>
-
-<div class="notice" id="status">
-Awaiting verified market prices. No simulated trades have been executed.
+<h2>Data &amp; Backup</h2>
+<p class="note">
+Trading records are saved in this browser.
+Export a backup before changing devices or
+clearing browser data.
+</p>
+<button id="export">Export Ledger JSON</button>
+<label>Import Ledger JSON</label>
+<input id="importFile" type="file"
+ accept="application/json,.json">
 </div>
 
 <footer>
-REVEL TradeGuard — virtual trading experiment.
-No real funds or orders. Market prices must be entered
-and verified manually. Data is stored locally in this
-browser and will not automatically sync between devices.
+REVEL TradeGuard · A$5,000 virtual starting capital.
+No real orders. No automatic market-price feed.
+Recorded prices and paper trades determine performance.
+Data may be stale or incomplete.
 </footer>
+
 </main>
 
 <script>
+'use strict';
+
 const START=5000;
-const KEY="revel-paper-ledger-v2";
-const symbols=["RTX","GD","LMT","BA.L","NOC"];
-const empty=()=>({
+const KEY='revel-paper-ledger-v2';
+
+const STOCKS={
+ RTX:'RTX Corporation',
+ GD:'General Dynamics',
+ LMT:'Lockheed Martin',
+ 'BA.L':'BAE Systems',
+ NOC:'Northrop Grumman'
+};
+
+const SYMBOLS=Object.keys(STOCKS);
+const $=id=>document.getElementById(id);
+
+const blank=()=>({
  cash:START,
  positions:{},
  prices:{},
@@ -131,143 +292,369 @@ const empty=()=>({
  valuations:[],
  peak:START
 });
-let state;
-try {
- state=JSON.parse(localStorage.getItem(KEY))||empty();
-} catch(e) {
- state=empty();
-}
-function money(n){
- return "A$"+n.toLocaleString("en-AU",{
+
+const fmt=n=>'A$'+Number(n).toLocaleString(
+ 'en-AU',{
  minimumFractionDigits:2,
  maximumFractionDigits:2
- });
+});
+
+let state=blank();
+let active='ALL';
+
+try{
+ const s=JSON.parse(localStorage.getItem(KEY));
+ if(s&&typeof s.cash==='number'&&
+ s.positions&&s.prices&&
+ Array.isArray(s.trades)&&
+ Array.isArray(s.valuations)){
+  state={...blank(),...s};
+ }
+}catch(e){}
+
+const shares=s=>Number(state.positions[s]||0);
+const px=s=>Number(state.prices[s]?.value||0);
+const marketValue=s=>shares(s)*px(s);
+
+const equity=()=>state.cash+
+ SYMBOLS.reduce((sum,s)=>sum+marketValue(s),0);
+
+const signed=n=>
+ (n>=0?'+':'-')+fmt(Math.abs(n));
+
+function stockProfit(s){
+ const cashflow=state.trades
+ .filter(t=>t.symbol===s)
+ .reduce((sum,t)=>sum+
+ (t.side==='SELL'?t.value:-t.value),0);
+ return marketValue(s)+cashflow;
 }
+
+function message(s){
+ $('message').textContent=s;
+}
+
 function save(){
  localStorage.setItem(KEY,JSON.stringify(state));
  render();
 }
-function position(s){return state.positions[s]||0}
-function price(s){return state.prices[s]?.value||0}
-function equity(){
- return state.cash+symbols.reduce((sum,s)=>
- sum+position(s)*price(s),0);
+
+function stockRow(s){
+ const p=state.prices[s];
+ const pnl=stockProfit(s);
+ return `
+ <div class="row">
+ <div>
+ <strong>${s}</strong>
+ <div class="stockname">${STOCKS[s]}</div>
+ <div class="stockname">
+ ${shares(s).toFixed(4)} shares
+ </div>
+ </div>
+ <div style="text-align:right">
+ <strong>
+ ${p?fmt(px(s)):'Awaiting price'}
+ </strong>
+ <div class="stockname">
+ ${shares(s)?fmt(marketValue(s)):'No position'}
+ </div>
+ <div class="stockname ${pnl<0?'red':'green'}">
+ ${signed(pnl)} P/L
+ </div>
+ </div>
+ </div>`;
 }
-function exposure(s){return position(s)*price(s)}
-function timestamp(){return new Date().toISOString()}
-function status(msg){
- document.getElementById("status").textContent=msg;
+
+function historyRows(items){
+ if(!items.length)return 'No trades recorded.';
+ return items.slice().reverse().map(t=>`
+ <div class="row">
+ <div>
+ <strong>${t.side} ${t.symbol}</strong>
+ <div class="stockname">
+ ${t.quantity} shares ·
+ ${new Date(t.time).toLocaleString('en-AU')}
+ </div>
+ <div class="stockname">
+ ${String(t.reason||'')
+ .replaceAll('&','&amp;')
+ .replaceAll('<','&lt;')}
+ </div>
+ </div>
+ <strong>${fmt(t.value)}</strong>
+ </div>
+ `).join('');
 }
-function recordPrice(){
- const s=document.getElementById("priceSymbol").value;
- const p=Number(document.getElementById("marketPrice").value);
- const source=document.getElementById("priceSource").value.trim();
- if(!Number.isFinite(p)||p<=0||!source){
-  status("Enter a valid price, source and timestamp.");
+
+function chart(){
+ const data=[
+ {value:START},
+ ...state.valuations
+ ].filter(v=>Number.isFinite(v.value));
+
+ if(data.length<2){
+  $('chart').innerHTML='';
+  $('chartLabel').textContent=
+   'No recorded valuations yet.';
   return;
  }
- state.prices[s]={value:p,source,recorded:timestamp()};
+
+ const vals=data.map(v=>v.value);
+ const lo=Math.min(...vals)-1;
+ const hi=Math.max(...vals)+1;
+
+ const pts=vals.map((v,i)=>{
+  const x=12+i*316/(vals.length-1);
+  const y=135-(v-lo)/(hi-lo)*112;
+  return `${x},${y}`;
+ }).join(' ');
+
+ $('chart').innerHTML=`
+ <line x1="12" y1="135" x2="328" y2="135"
+ stroke="#42516a"/>
+ <polyline points="${pts}" fill="none"
+ stroke="#e8c27a" stroke-width="3"
+ stroke-linejoin="round"/>`;
+
+ $('chartLabel').textContent=
+ `${state.valuations.length} recorded valuations.
+ Not a continuous live feed.`;
+}
+
+function render(){
+ const e=equity();
+ const pl=e-START;
+
+ $('equity').textContent=fmt(e);
+ $('totalPL').textContent=
+ `${signed(pl)} (${(pl/START*100).toFixed(2)}%)`;
+ $('totalPL').className=pl<0?'red':'green';
+ $('cash').textContent=fmt(state.cash);
+
+ $('openCount').textContent=
+ SYMBOLS.filter(s=>shares(s)>0).length;
+
+ $('allStocks').innerHTML=
+ SYMBOLS.map(stockRow).join('');
+
+ $('allHistory').innerHTML=
+ historyRows(state.trades);
+
+ chart();
+
+ $('allPanel').classList.toggle(
+ 'hidden',active!=='ALL'
+ );
+ $('stockPanel').classList.toggle(
+ 'hidden',active==='ALL'
+ );
+
+ document.querySelectorAll('#tabs button')
+ .forEach(b=>{
+  b.classList.toggle(
+   'active',b.dataset.tab===active
+  );
+ });
+
+ if(active!=='ALL'){
+  const s=active;
+  const p=state.prices[s];
+
+  $('stockTitle').textContent=
+   `${s} · ${STOCKS[s]}`;
+
+  $('stockPrice').textContent=
+   p?fmt(px(s)):'Awaiting price';
+
+  $('stockSource').textContent=p?
+   `${p.source} (recorded ${
+    new Date(p.recorded).toLocaleString('en-AU')
+   })`:'Not connected';
+
+  $('stockShares').textContent=
+   shares(s).toFixed(4);
+
+  $('stockValue').textContent=
+   fmt(marketValue(s));
+
+  $('stockPL').textContent=
+   signed(stockProfit(s));
+
+  $('stockHistory').innerHTML=
+   historyRows(state.trades.filter(
+    t=>t.symbol===s
+   ));
+ }
+}
+
+function show(s){
+ active=s;
+ render();
+}
+
+$('tabs').innerHTML=
+ ['ALL',...SYMBOLS].map(s=>`
+ <button type="button" data-tab="${s}">
+ ${s==='ALL'?'ALL STOCKS':
+ s==='BA.L'?'BAE':s}
+ </button>
+ `).join('');
+
+$('tabs').addEventListener('click',e=>{
+ const b=e.target.closest('button[data-tab]');
+ if(b)show(b.dataset.tab);
+});
+
+$('savePrice').addEventListener('click',()=>{
+ const s=active;
+ const p=Number($('priceInput').value);
+ const source=$('sourceInput').value.trim();
+
+ if(!Number.isFinite(p)||p<=0||!source){
+  message('Enter a valid price and source.');
+  return;
+ }
+
+ state.prices[s]={
+  value:p,
+  source,
+  recorded:new Date().toISOString()
+ };
+
  const e=equity();
  state.peak=Math.max(state.peak,e);
- state.valuations.push({time:timestamp(),value:e});
+ state.valuations.push({
+  time:new Date().toISOString(),
+  value:e
+ });
+
  save();
- status("Price recorded for "+s+". Source: "+source);
-}
-function trade(){
- const s=document.getElementById("tradeSymbol").value;
- const side=document.getElementById("side").value;
- const q=Number(document.getElementById("quantity").value);
- const reason=document.getElementById("reason").value.trim();
- const p=price(s);
+ message(`Recorded ${s} at ${fmt(p)}.
+ Manual price, not a live quote.`);
+});
+
+$('submitTrade').addEventListener('click',()=>{
+ const s=active;
+ const side=$('side').value;
+ const q=Number($('qty').value);
+ const reason=$('reason').value.trim();
+ const p=px(s);
+
  if(!Number.isFinite(q)||q<=0||!p||!reason){
-  status("Record a market price, valid quantity and trade reason first.");
+  message('Enter quantity, reason and price.');
   return;
  }
- const cost=q*p;
- const before=equity();
- const drawdown=(state.peak-before)/state.peak;
- if(side==="BUY"){
-  if(drawdown>=.05){
-   status("BUY BLOCKED: portfolio drawdown reached 5%.");
-   return;
-  }
-  if(cost>state.cash-START*.30+0.000001){
-   status("BUY BLOCKED: minimum 30% cash reserve.");
-   return;
-  }
-  if(exposure(s)+cost>before*.20+0.000001){
-   status("BUY BLOCKED: maximum 20% position.");
-   return;
-  }
-  state.cash-=cost;
-  state.positions[s]=position(s)+q;
- }else{
-  if(q>position(s)+0.000001){
-   status("SELL BLOCKED: insufficient shares.");
-   return;
-  }
-  state.cash+=cost;
-  state.positions[s]=Math.max(0,position(s)-q);
+
+ const value=q*p;
+ const e=equity();
+ const drawdown=state.peak>0?
+  (state.peak-e)/state.peak:0;
+
+ if(drawdown>=.08){
+  message('EMERGENCY HALT: 8% drawdown.');
+  return;
  }
+
+ if(side==='BUY'){
+  if(drawdown>=.05){
+   message('BUY BLOCKED: 5% drawdown.');
+   return;
+  }
+
+  if(value>state.cash-START*.30+1e-7){
+   message('BUY BLOCKED: 30% cash reserve.');
+   return;
+  }
+
+  if(marketValue(s)+value>e*.20+1e-7){
+   message('BUY BLOCKED: 20% stock limit.');
+   return;
+  }
+
+  state.cash-=value;
+  state.positions[s]=shares(s)+q;
+
+ }else{
+  if(q>shares(s)+1e-7){
+   message('SELL BLOCKED: insufficient shares.');
+   return;
+  }
+
+  state.cash+=value;
+  state.positions[s]=Math.max(0,shares(s)-q);
+ }
+
  state.trades.push({
-  time:timestamp(),symbol:s,side,
-  quantity:q,price:p,value:cost,reason,
+  time:new Date().toISOString(),
+  symbol:s,
+  side,
+  quantity:q,
+  price:p,
+  value,
+  reason,
   source:state.prices[s].source
  });
- state.valuations.push({time:timestamp(),value:equity()});
+
+ state.valuations.push({
+  time:new Date().toISOString(),
+  value:equity()
+ });
+
+ state.peak=Math.max(state.peak,equity());
+
  save();
- status(side+" recorded for "+s+" at "+money(p)+
- " per share. Paper trade only.");
-}
-function drawChart(){
- const svg=document.getElementById("chart");
- const data=[{value:START},...state.valuations];
- if(data.length<2){
-  svg.innerHTML="";
-  document.getElementById("chartStatus").textContent=
-  "Awaiting recorded portfolio valuations.";
-  return;
+
+ message(`${side} ${q} ${s} at ${fmt(p)}
+ recorded as a paper trade.`);
+});
+
+$('export').addEventListener('click',()=>{
+ const blob=new Blob([
+  JSON.stringify({
+   format:'REVEL-paper-v2',
+   exported:new Date().toISOString(),
+   state
+  },null,2)
+ ],{type:'application/json'});
+
+ const url=URL.createObjectURL(blob);
+ const a=document.createElement('a');
+ a.href=url;
+ a.download='revel-tradeguard-ledger.json';
+ a.click();
+
+ setTimeout(()=>URL.revokeObjectURL(url),1000);
+});
+
+$('importFile').addEventListener('change',
+ async e=>{
+ const f=e.target.files?.[0];
+ if(!f)return;
+
+ try{
+  const obj=JSON.parse(await f.text());
+  const s=obj.state;
+
+  if(!s||typeof s.cash!=='number'||
+   !s.positions||!s.prices||
+   !Array.isArray(s.trades)||
+   !Array.isArray(s.valuations)){
+   throw Error('Invalid ledger');
+  }
+
+  if(!confirm('Replace existing ledger?'))return;
+
+  state={...blank(),...s};
+  save();
+  message('Ledger restored.');
+
+ }catch(err){
+  message('Import failed: '+err.message);
  }
- const vals=data.map(x=>x.value);
- let lo=Math.min(...vals),hi=Math.max(...vals);
- if(hi===lo){hi+=1;lo-=1}
- const points=vals.map((v,i)=>{
-  const x=12+i*316/(vals.length-1);
-  const y=125-(v-lo)/(hi-lo)*110;
-  return x+","+y;
- }).join(" ");
- svg.innerHTML=
- '<line x1="12" y1="125" x2="328" y2="125" stroke="#42516a"/>'+
- '<polyline points="'+points+'" fill="none" stroke="#e8c27a" stroke-width="3"/>';
- document.getElementById("chartStatus").textContent=
- "Recorded valuations: "+state.valuations.length;
-}
-function render(){
- const e=equity(),gain=e-START;
- const pct=gain/START*100;
- document.getElementById("equity").textContent=money(e);
- const pl=document.getElementById("profit");
- pl.textContent=(gain>=0?"+":"-")+money(Math.abs(gain))+
- " ("+pct.toFixed(2)+"%)";
- pl.className=gain>=0?"green":"red";
- document.getElementById("cash").textContent=money(state.cash);
- const active=symbols.filter(s=>position(s)>0);
- document.getElementById("count").textContent=active.length;
- document.getElementById("holdings").innerHTML=
- active.length?active.map(s=>
- '<div class="row"><span>'+s+
- ' ('+position(s).toFixed(4)+' shares)</span><strong>'+
- money(exposure(s))+'</strong></div>'
- ).join(""):"No positions opened.";
- document.getElementById("history").innerHTML=
- state.trades.length?state.trades.slice().reverse().map(t=>
- '<div class="row"><span>'+t.side+" "+t.symbol+
- " × "+t.quantity+"<br><small>"+
- t.time.slice(0,16).replace("T"," ")+" UTC</small></span><strong>"+
- money(t.value)+"</strong></div>"
- ).join(""):"No trades recorded.";
- drawChart();
-}
+
+ e.target.value='';
+});
+
 render();
 </script>
 </body>
