@@ -8,6 +8,18 @@ import {
 } from "../../lib/simulation.js";
 
 export default async (req: Request) => {
+  try {
+    return await buildDashboard(req);
+  } catch (err) {
+    console.error("dashboard failed", err);
+    return Response.json(
+      { error: "unavailable", message: "Portfolio database is temporarily unavailable" },
+      { status: 503, headers: { "cache-control": "no-store" } },
+    );
+  }
+};
+
+async function buildDashboard(req: Request) {
   const full = new URL(req.url).searchParams.get("full") === "1";
   const [acctRows, posRows, prices, tradeRows, history, runs] = await Promise.all([
     db.select().from(account).limit(1),
@@ -40,6 +52,6 @@ export default async (req: Request) => {
     equityHistory: history.reverse(),
     lastRun: runs[0] ?? null,
   }, { headers: { "cache-control": "no-store" } });
-};
+}
 
 export const config: Config = { path: "/api/dashboard", method: "GET" };
