@@ -118,6 +118,8 @@ footer{
   font-size:13px;line-height:1.5;
 }
 .alert button{margin-top:8px;padding:7px 11px}
+.right{text-align:right;max-width:65%}
+.amber{color:var(--gold)}
 </style>
 </head>
 <body>
@@ -136,6 +138,16 @@ footer{
 <strong>Connection problem.</strong>
 <span id="connectionText"></span>
 <div><button type="button" id="retry">Retry now</button></div>
+</div>
+
+<div class="card" id="systemStatus">
+<h2>System Status</h2>
+<div class="row"><span>Simulation</span><strong id="simStatus">—</strong></div>
+<div class="row"><span>Latest market data</span><span class="right" id="mdTime">—</span></div>
+<div class="row"><span>Last successful update</span><span class="right" id="okRun">—</span></div>
+<div class="row"><span>Scheduled updates</span><span class="right" id="schedRun">—</span></div>
+<div class="row"><span>Connection</span><span class="right" id="connStatus">—</span></div>
+<p class="note">Paper trading only. Real-money trading is disabled: there is no broker connection.</p>
 </div>
 
 <nav id="tabs" class="tabs"></nav>
@@ -289,12 +301,13 @@ const signed=n=>!ok(n)?'—':(n>=0?'+':'-')+fmt(Math.abs(n));
 const esc=v=>String(v??'').replaceAll('&','&amp;')
  .replaceAll('<','&lt;').replaceAll('>','&gt;');
 const when=t=>new Date(t).toLocaleString('en-AU',
- {dateStyle:'medium',timeStyle:'short'});
+ {day:'numeric',month:'short',year:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'});
 
 let data=null;
 let active='ALL';
 let refreshing=false;
 let lastError=null;
+let refreshError=null;
 
 // Static configuration only (symbols, names, rules) so navigation and the
 // layout can render while the server is unreachable. No prices, cash,
@@ -473,6 +486,8 @@ function renderInner(){
   r?'Latest refresh completed. All figures come from recorded verified prices and simulated trades.':
   'Waiting for verified prices. No trades are made until real prices are recorded.';
 
+ renderSystemStatus();
+
  if(active!=='ALL'){
   const st=stock(active);
   if(!st){active='ALL';return renderInner();}
@@ -498,6 +513,54 @@ function renderInner(){
   $('stockHistory').innerHTML=historyRows(
    data.trades.filter(t=>t.symbol===st.symbol));
  }
+}
+
+// Next */15 slot on Monday-Friday (UTC), matching the scheduled-prices function.
+function nextScheduledRun(from=new Date()){
+ const t=new Date(from);t.setUTCSeconds(0,0);
+ t.setUTCMinutes(Math.floor(t.getUTCMinutes()/15)*15+15);
+ while(t.getUTCDay()===0||t.getUTCDay()===6){
+  t.setUTCDate(t.getUTCDate()+1);t.setUTCHours(0,0,0,0);
+ }
+ return t;
+}
+function setStatus(id,text,cls){const el=$(id);el.textContent=text;el.className='right '+(cls||'');}
+function renderSystemStatus(){
+ const r=data.lastRun, okr=data.lastSuccessfulRun, sr=data.lastScheduledRun;
+ const md=data.marketData, a=data.account;
+ const anyOpen=data.stocks.some(s=>s.price?.marketOpen);
+ // Simulation status
+ let sim,simCls;
+ if(data.offline){sim='Unknown (disconnected)';simCls='muted';}
+ else if(!data.providerConfigured){sim='Stopped · price feed not configured';simCls='red';}
+ else if(a.buysHalted){sim='Running · BUYS HALTED (equity ≤ A$2,500)';simCls='red';}
+ else if(r?.status==='error'){sim='Running · last update failed';simCls='red';}
+ else if(!r){sim='Waiting for first price update';simCls='amber';}
+ else if(!anyOpen){sim='Running · markets closed, no trades until open';simCls='amber';}
+ else{sim='Running · trading on fresh verified prices';simCls='green';}
+ $('simStatus').textContent=sim;$('simStatus').className=simCls;
+ // Market data
+ setStatus('mdTime',md?.latestQuoteTime?
+  `Quote ${when(md.latestQuoteTime)} · fetched ${when(md.latestFetchedAt)} · ${md.source} (${md.pricedSymbols}/${data.stocks.length} stocks)`:
+  data.offline?'Unavailable':'No verified prices recorded yet',md?.latestQuoteTime?'':'muted');
+ // Last success
+ setStatus('okRun',okr?`${when(okr.startedAt)} · ${okr.trigger==='schedule'?'scheduled':okr.trigger} · ${okr.message||okr.status}`:
+  data.offline?'Unknown':'None yet',okr?'':'muted');
+ // Schedule
+ const next=nextScheduledRun();
+ const nextTxt=`next window ${when(next)}`;
+ if(data.offline)setStatus('schedRun','Unknown','muted');
+ else if(!sr)setStatus('schedRun',`No scheduled run recorded yet · every 15 min Mon–Fri (UTC) · ${nextTxt}`,'amber');
+ else setStatus('schedRun',`Last ${when(sr.startedAt)} · ${sr.status==='error'?'FAILED: '+(sr.message||'error'):sr.message||sr.status} · ${nextTxt}`,
+  sr.status==='error'?'red':'');
+ // Connection / errors
+ const errs=[];
+ if(lastError)errs.push('Dashboard server: '+lastError);
+ if(!data.offline&&!data.providerConfigured)errs.push('Market-data provider not configured');
+ if(r?.status==='error')errs.push('Market data: '+(r.message||'last update failed'));
+ else if(r?.status==='partial')errs.push('Market data: '+(r.message||'some prices missing'));
+ if(refreshError)errs.push('Refresh: '+refreshError);
+ setStatus('connStatus',errs.length?errs.join(' · '):'Connected · no errors',errs.length?'red':'green');
 }
 
 async function fetchDashboard(){
@@ -545,10 +608,12 @@ async function maybeRefresh(){
  if(last&&Date.now()-last<(data.rules.refreshIntervalMin+1)*60000)return;
  refreshing=true;
  try{
-  const r=await fetch('/api/refresh',{method:'POST'})
-   .then(r=>r.json());
-  if(r.ran)await load();
- }catch(e){}
+  const res=await fetch('/api/refresh',{method:'POST'});
+  const r=await res.json().catch(()=>null);
+  if(!res.ok||!r)throw Error(r?.reason||'HTTP '+res.status);
+  refreshError=null;
+  if(r.ran)await load();else render();
+ }catch(e){refreshError=e.message||'refresh failed';render();}
  refreshing=false;
 }
 

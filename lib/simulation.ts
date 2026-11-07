@@ -6,15 +6,17 @@ import {
   account, positions, fetchRuns, priceSnapshots, trades, equitySnapshots,
 } from "../db/schema.js";
 
-export const START_CAPITAL = 5000;
-export const MAX_ALLOCATION = 0.2; // max 20% of equity per stock
-export const TARGET_ALLOCATION = 0.14; // equal weight: 5 x 14% = 70% invested
-export const MIN_CASH_RESERVE = 0.3; // keep at least 30% of equity in cash
-export const BUY_HALT_EQUITY = 2500; // no new buys at or below A$2,500
-export const MIN_TRADE_AUD = 25; // ignore rebalancing differences smaller than this
+import {
+  planOrders, START_CAPITAL, BUY_HALT_EQUITY, round,
+} from "./rules.js";
+export {
+  START_CAPITAL, MAX_ALLOCATION, TARGET_ALLOCATION, MIN_CASH_RESERVE, BUY_HALT_EQUITY, MIN_TRADE_AUD,
+} from "./rules.js";
 export const MAX_TRADE_QUOTE_AGE_MIN = 20; // only trade on quotes newer than this
 export const MAX_TRADE_FX_AGE_MIN = 120;
 export const REFRESH_INTERVAL_MIN = 14; // throttle between provider calls
+export const SCHEDULED_MIN_GAP_MIN = 10;
+export const SCHEDULE_CRON = "*/15 * * * 1-5"; // keep in sync with netlify/functions/scheduled-prices.mts
 
 export const STOCKS = [
   { symbol: "LMT", providerSymbol: "LMT", name: "Lockheed Martin", note: "NYSE" },
@@ -33,11 +35,9 @@ const SOURCE = "Twelve Data";
 const API = "https://api.twelvedata.com";
 const LOCK_KEY = 7271001;
 
-const round = (n: number, dp = 2) => Math.round(n * 10 ** dp) / 10 ** dp;
-const floorShares = (n: number) => Math.floor(n * 10000) / 10000;
 const ageMin = (d: Date, now: Date) => (now.getTime() - d.getTime()) / 60000;
 
-type Quote = {
+export type Quote = {
   symbol: string; providerSymbol: string; exchange: string; currency: string;
   priceNative: number; quoteTime: Date; marketOpen: boolean;
 };
@@ -82,9 +82,11 @@ async function fetchQuotes(key: string, notes: string[]): Promise<Quote[]> {
   return out;
 }
 
+export type FxRates = Record<string, { rate: number; time: Date; pair: string }>;
+
 async function fetchFx(key: string, currencies: string[]) {
   const pairs = currencies.filter((c) => c !== "AUD").map((c) => `${c}/AUD`);
-  const rates: Record<string, { rate: number; time: Date; pair: string }> = {
+  const rates: FxRates = {
     AUD: { rate: 1, time: new Date(), pair: "AUD/AUD" },
   };
   if (!pairs.length) return rates;
@@ -114,7 +116,10 @@ export async function runCycle(trigger: "schedule" | "dashboard" | "manual"): Pr
 
     const [last] = await tx.select().from(fetchRuns).orderBy(desc(fetchRuns.startedAt)).limit(1);
     const now = new Date();
-    if (last && ageMin(last.startedAt, now) < REFRESH_INTERVAL_MIN) {
+    // Scheduled runs use a shorter throttle so a dashboard-triggered refresh a few minutes earlier
+    // never causes the 15-minute schedule to skip a cycle.
+    const minGap = trigger === "schedule" ? SCHEDULED_MIN_GAP_MIN : REFRESH_INTERVAL_MIN;
+    if (last && ageMin(last.startedAt, now) < minGap) {
       return { ran: false, reason: "Prices were refreshed recently.", runId: last.id };
     }
 
@@ -133,117 +138,87 @@ export async function runCycle(trigger: "schedule" | "dashboard" | "manual"): Pr
       return { ran: true, runId: run.id, status: "error", notes: [msg, ...notes] };
     }
 
-    // Store verified, AUD-converted prices.
-    type Priced = Quote & { snapshotId: number; priceAud: number; fxRate: number; fxTime: Date; fxPair: string };
-    const priced: Record<string, Priced> = {};
-    for (const q of quotes) {
-      const r = fx[q.currency];
-      if (!r) { notes.push(`${q.symbol}: no ${q.currency}/AUD rate, price not recorded.`); continue; }
-      const priceAud = q.priceNative * r.rate;
-      const [snap] = await tx.insert(priceSnapshots).values({
-        runId: run.id, symbol: q.symbol, providerSymbol: q.providerSymbol, exchange: q.exchange,
-        currency: q.currency, priceNative: q.priceNative, fxPair: r.pair, fxRate: r.rate, fxTime: r.time,
-        priceAud, quoteTime: q.quoteTime, marketOpen: q.marketOpen, source: SOURCE, fetchedAt: now,
-      }).returning({ id: priceSnapshots.id });
-      priced[q.symbol] = { ...q, snapshotId: snap.id, priceAud, fxRate: r.rate, fxTime: r.time, fxPair: r.pair };
-    }
-
-    // Latest known AUD price per stock (this run, else the last stored verified price).
-    const latest = await latestPrices(tx);
-    const [acct] = await tx.select().from(account).where(eq(account.id, 1));
-    const posRows = await tx.select().from(positions);
-    const holdings: Record<string, { shares: number; cost: number }> = {};
-    for (const p of posRows) holdings[p.symbol] = { shares: p.shares, cost: p.costBasisAud };
-    let cash = acct.cash;
-
-    const sharesOf = (s: string) => holdings[s]?.shares ?? 0;
-    const valueOf = (s: string) => sharesOf(s) * (latest[s]?.priceAud ?? 0);
-    const unpriced = STOCKS.filter((s) => sharesOf(s.symbol) > 0 && !latest[s.symbol]);
-    const equity = () => cash + STOCKS.reduce((sum, s) => sum + valueOf(s.symbol), 0);
-
-    const tradable = (s: string) => {
-      const p = priced[s];
-      if (!p) return `${s}: no fresh verified price this run.`;
-      if (!p.marketOpen) return `${s}: market closed, no simulated trade.`;
-      if (ageMin(p.quoteTime, now) > MAX_TRADE_QUOTE_AGE_MIN) return `${s}: quote is ${Math.round(ageMin(p.quoteTime, now))} min old, no simulated trade.`;
-      if (p.currency !== "AUD" && ageMin(p.fxTime, now) > MAX_TRADE_FX_AGE_MIN) return `${s}: FX rate is stale, no simulated trade.`;
-      return null;
-    };
-
-    const record = async (s: string, side: "BUY" | "SELL", qty: number, rule: string) => {
-      const p = priced[s];
-      const eqBefore = equity();
-      const value = round(qty * p.priceAud, 2);
-      const h = (holdings[s] ??= { shares: 0, cost: 0 });
-      if (side === "BUY") {
-        cash = round(cash - value, 2);
-        h.cost += value;
-        h.shares = round(h.shares + qty, 6);
-      } else {
-        const frac = h.shares > 0 ? qty / h.shares : 0;
-        h.cost = Math.max(0, h.cost * (1 - frac));
-        cash = round(cash + value, 2);
-        h.shares = Math.max(0, round(h.shares - qty, 6));
-      }
-      await tx.insert(trades).values({
-        runId: run.id, snapshotId: p.snapshotId, executedAt: now, symbol: s, side, shares: qty,
-        priceAud: p.priceAud, valueAud: value, priceNative: p.priceNative, currency: p.currency,
-        fxRate: p.fxRate, quoteTime: p.quoteTime, rule, cashAfter: cash, equityAtTrade: eqBefore,
-      });
-      await tx.insert(positions).values({ symbol: s, shares: h.shares, costBasisAud: h.cost, updatedAt: now })
-        .onConflictDoUpdate({ target: positions.symbol, set: { shares: h.shares, costBasisAud: h.cost, updatedAt: now } });
-    };
-
-    if (unpriced.length) {
-      notes.push(`Equity cannot be valued (no price for ${unpriced.map((s) => s.symbol).join(", ")}); simulated trading skipped.`);
-    } else {
-      // 1) Trim positions above the 20% limit back to the 14% target (sells are allowed even when buys are halted).
-      for (const s of STOCKS) {
-        const e = equity();
-        if (valueOf(s.symbol) <= e * MAX_ALLOCATION + 0.005) continue;
-        const why = tradable(s.symbol);
-        if (why) { notes.push(`${why} (position above 20% limit)`); continue; }
-        const excess = valueOf(s.symbol) - e * TARGET_ALLOCATION;
-        const qty = Math.min(sharesOf(s.symbol), floorShares(excess / priced[s.symbol].priceAud));
-        if (qty > 0) await record(s.symbol, "SELL", qty, `Trim: position above ${MAX_ALLOCATION * 100}% limit, rebalanced to ${TARGET_ALLOCATION * 100}% target`);
-      }
-
-      // 2) Buy towards the equal-weight 14% target within the risk limits.
-      for (const s of STOCKS) {
-        const e = equity();
-        if (e <= BUY_HALT_EQUITY) { notes.push(`BUYS HALTED: equity A$${e.toFixed(2)} is at or below A$${BUY_HALT_EQUITY.toFixed(2)}.`); break; }
-        const shortfall = e * TARGET_ALLOCATION - valueOf(s.symbol);
-        if (shortfall < MIN_TRADE_AUD) continue;
-        const why = tradable(s.symbol);
-        if (why) { notes.push(why); continue; }
-        const capRoom = e * MAX_ALLOCATION - valueOf(s.symbol);
-        const cashRoom = cash - e * MIN_CASH_RESERVE;
-        const budget = Math.min(shortfall, capRoom, cashRoom);
-        if (budget < MIN_TRADE_AUD) {
-          notes.push(`${s.symbol}: buy blocked by ${cashRoom <= capRoom ? "30% cash reserve" : "20% stock limit"}.`);
-          continue;
-        }
-        const qty = floorShares(budget / priced[s.symbol].priceAud);
-        if (qty > 0) await record(s.symbol, "BUY", qty, `Equal-weight buy towards ${TARGET_ALLOCATION * 100}% target`);
-      }
-    }
-
-    await tx.update(account).set({ cash, updatedAt: now }).where(eq(account.id, 1));
-
-    if (!unpriced.length) {
-      const e = equity();
-      await tx.insert(equitySnapshots).values({
-        runId: run.id, recordedAt: now, cash, positionsValue: round(e - cash, 2), equity: round(e, 2),
-        profitLoss: round(e - acct.startingCapital, 2), buysHalted: e <= BUY_HALT_EQUITY,
-      });
-    }
-
-    const status = Object.keys(priced).length === STOCKS.length ? "ok" : Object.keys(priced).length ? "partial" : "error";
-    await tx.update(fetchRuns).set({
-      status, message: `${Object.keys(priced).length}/${STOCKS.length} verified prices recorded.`, notes, finishedAt: new Date(),
-    }).where(eq(fetchRuns.id, run.id));
-    return { ran: true, runId: run.id, status, notes };
+    return applyMarketData(tx, run.id, quotes, fx, notes, now, SOURCE);
   });
+}
+
+// Stores verified prices, applies the risk rules and persists simulated fills, cash, positions and
+// equity for one run. Must be called inside a transaction. The isolated test calls this with test
+// quotes inside a transaction that is always rolled back.
+export async function applyMarketData(
+  tx: any, runId: number, quotes: Quote[], fx: FxRates, notes: string[], now: Date, source: string,
+): Promise<RunResult> {
+  type Priced = Quote & { snapshotId: number; priceAud: number; fxRate: number; fxTime: Date; fxPair: string };
+  const priced: Record<string, Priced> = {};
+  for (const q of quotes) {
+    const r = fx[q.currency];
+    if (!r) { notes.push(`${q.symbol}: no ${q.currency}/AUD rate, price not recorded.`); continue; }
+    const priceAud = q.priceNative * r.rate;
+    const [snap] = await tx.insert(priceSnapshots).values({
+      runId, symbol: q.symbol, providerSymbol: q.providerSymbol, exchange: q.exchange,
+      currency: q.currency, priceNative: q.priceNative, fxPair: r.pair, fxRate: r.rate, fxTime: r.time,
+      priceAud, quoteTime: q.quoteTime, marketOpen: q.marketOpen, source, fetchedAt: now,
+    }).returning({ id: priceSnapshots.id });
+    priced[q.symbol] = { ...q, snapshotId: snap.id, priceAud, fxRate: r.rate, fxTime: r.time, fxPair: r.pair };
+  }
+
+  // Latest known AUD price per stock (this run, else the last stored verified price).
+  const latest = await latestPrices(tx);
+  const [acct] = await tx.select().from(account).where(eq(account.id, 1));
+  const posRows = await tx.select().from(positions);
+  const shares: Record<string, number> = {};
+  const costBasis: Record<string, number> = {};
+  for (const p of posRows) { shares[p.symbol] = p.shares; costBasis[p.symbol] = p.costBasisAud; }
+
+  const tradeable: Record<string, { priceAud: number } | { blocked: string }> = {};
+  for (const s of STOCKS) {
+    const p = priced[s.symbol];
+    if (!p) continue;
+    const quoteAge = ageMin(p.quoteTime, now);
+    tradeable[s.symbol] =
+      !p.marketOpen ? { blocked: `${s.symbol}: market closed, no simulated trade.` }
+      : quoteAge > MAX_TRADE_QUOTE_AGE_MIN ? { blocked: `${s.symbol}: quote is ${Math.round(quoteAge)} min old, no simulated trade.` }
+      : p.currency !== "AUD" && ageMin(p.fxTime, now) > MAX_TRADE_FX_AGE_MIN ? { blocked: `${s.symbol}: FX rate is stale, no simulated trade.` }
+      : { priceAud: p.priceAud };
+  }
+
+  const plan = planOrders({
+    symbols: STOCKS.map((s) => s.symbol),
+    cash: acct.cash,
+    shares,
+    costBasis,
+    valuationPrices: Object.fromEntries(STOCKS.map((s) => [s.symbol, latest[s.symbol]?.priceAud])),
+    tradeable,
+  });
+  notes.push(...plan.notes);
+
+  for (const o of plan.orders) {
+    const p = priced[o.symbol];
+    await tx.insert(trades).values({
+      runId, snapshotId: p.snapshotId, executedAt: now, symbol: o.symbol, side: o.side, shares: o.shares,
+      priceAud: o.priceAud, valueAud: o.valueAud, priceNative: p.priceNative, currency: p.currency,
+      fxRate: p.fxRate, quoteTime: p.quoteTime, rule: o.rule, cashAfter: o.cashAfter, equityAtTrade: o.equityBefore,
+    });
+    await tx.insert(positions).values({ symbol: o.symbol, shares: o.sharesAfter, costBasisAud: o.costBasisAfter, updatedAt: now })
+      .onConflictDoUpdate({ target: positions.symbol, set: { shares: o.sharesAfter, costBasisAud: o.costBasisAfter, updatedAt: now } });
+  }
+
+  await tx.update(account).set({ cash: plan.cash, updatedAt: now }).where(eq(account.id, 1));
+
+  if (!plan.skipped && plan.equity !== null) {
+    const e = plan.equity;
+    await tx.insert(equitySnapshots).values({
+      runId, recordedAt: now, cash: plan.cash, positionsValue: round(e - plan.cash, 2), equity: round(e, 2),
+      profitLoss: round(e - acct.startingCapital, 2), buysHalted: e <= BUY_HALT_EQUITY,
+    });
+  }
+
+  const n = Object.keys(priced).length;
+  const status = n === STOCKS.length ? "ok" : n ? "partial" : "error";
+  await tx.update(fetchRuns).set({
+    status, message: `${n}/${STOCKS.length} verified prices recorded.`, notes, finishedAt: new Date(),
+  }).where(eq(fetchRuns.id, runId));
+  return { ran: true, runId, status, notes };
 }
 
 export async function latestPrices(conn: any = db) {

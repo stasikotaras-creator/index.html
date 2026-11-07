@@ -1,10 +1,10 @@
 import type { Config } from "@netlify/functions";
-import { desc, asc } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { account, positions, trades, equitySnapshots, fetchRuns } from "../../db/schema.js";
 import {
   STOCKS, START_CAPITAL, MAX_ALLOCATION, TARGET_ALLOCATION, MIN_CASH_RESERVE, BUY_HALT_EQUITY,
-  REFRESH_INTERVAL_MIN, latestPrices,
+  REFRESH_INTERVAL_MIN, SCHEDULE_CRON, latestPrices,
 } from "../../lib/simulation.js";
 
 export default async (req: Request) => {
@@ -21,14 +21,19 @@ export default async (req: Request) => {
 
 async function buildDashboard(req: Request) {
   const full = new URL(req.url).searchParams.get("full") === "1";
-  const [acctRows, posRows, prices, tradeRows, history, runs] = await Promise.all([
+  const [acctRows, posRows, prices, tradeRows, history, runs, okRuns, schedRuns] = await Promise.all([
     db.select().from(account).limit(1),
     db.select().from(positions),
     latestPrices(),
     db.select().from(trades).orderBy(desc(trades.executedAt), desc(trades.id)).limit(full ? 100000 : 300),
     db.select().from(equitySnapshots).orderBy(desc(equitySnapshots.recordedAt)).limit(full ? 100000 : 400),
     db.select().from(fetchRuns).orderBy(desc(fetchRuns.startedAt)).limit(1),
+    db.select().from(fetchRuns).where(inArray(fetchRuns.status, ["ok", "partial"]))
+      .orderBy(desc(fetchRuns.startedAt)).limit(1),
+    db.select().from(fetchRuns).where(eq(fetchRuns.trigger, "schedule")).orderBy(desc(fetchRuns.startedAt)).limit(1),
   ]);
+  const quoteTimes = Object.values(prices).map((p) => p.quoteTime).sort();
+  const fetchTimes = Object.values(prices).map((p) => p.fetchedAt).sort();
   const acct = acctRows[0];
   const cash = acct?.cash ?? START_CAPITAL;
   const shares: Record<string, number> = {};
@@ -51,6 +56,16 @@ async function buildDashboard(req: Request) {
     trades: tradeRows,
     equityHistory: history.reverse(),
     lastRun: runs[0] ?? null,
+    lastSuccessfulRun: okRuns[0] ?? null,
+    lastScheduledRun: schedRuns[0] ?? null,
+    schedule: { cron: SCHEDULE_CRON, description: "Every 15 minutes, Monday to Friday (UTC)" },
+    marketData: {
+      source: Object.values(prices)[0]?.source ?? null,
+      latestQuoteTime: quoteTimes.at(-1) ?? null,
+      latestFetchedAt: fetchTimes.at(-1) ?? null,
+      pricedSymbols: Object.keys(prices).length,
+    },
+    realMoneyTrading: false,
   }, { headers: { "cache-control": "no-store" } });
 }
 
