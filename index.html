@@ -99,26 +99,26 @@ footer{
   margin:22px 0;color:var(--muted);
   font-size:12px;line-height:1.6;
 }
-</style>
-</head>
-<body>
-<main>
-
-<header>
+.tag{
+  display:inline-block;fon<header>
 <h1>REVEL / TRADEGUARD</h1>
 <span class="badge">PAPER TRADING</span>
 </header>
+<div class="status">
+<span id="feedStatus">Connecting…</span>
+<span id="updated"></span>
+</div>
 
 <nav id="tabs" class="tabs"></nav>
 
 <section class="card">
 <small>TOTAL PORTFOLIO EQUITY</small>
-<div class="value" id="equity">A$5,000.00</div>
-<strong id="totalPL">A$0.00 (0.00%)</strong>
+<div class="value" id="equity">—</div>
+<strong id="totalPL">—</strong>
 <div class="grid" style="margin-top:15px">
 <div class="stat">
 <small>Available cash</small>
-<strong id="cash">A$5,000.00</strong>
+<strong id="cash">—</strong>
 </div>
 <div class="stat">
 <small>Open positions</small>
@@ -154,8 +154,20 @@ No trades recorded.
 <div class="card">
 <h2 id="stockTitle"></h2>
 <div class="row">
-<span>Last recorded price</span>
+<span>Last verified price (AUD)</span>
 <strong id="stockPrice">Awaiting price</strong>
+</div>
+<div class="row">
+<span>Market status</span>
+<span id="stockMarket" class="note">—</span>
+</div>
+<div class="row">
+<span>Native price</span>
+<span class="note" id="stockNative">—</span>
+</div>
+<div class="row">
+<span>AUD conversion</span>
+<span class="note" id="stockFx">—</span>
 </div>
 <div class="row">
 <span>Price source</span>
@@ -170,51 +182,14 @@ No trades recorded.
 <strong id="stockValue">A$0.00</strong>
 </div>
 <div class="row">
+<span>Allocation (target / limit)</span>
+<strong id="stockAlloc">0.0%</strong>
+</div>
+<div class="row">
 <span>Stock profit / loss</span>
 <strong id="stockPL">A$0.00</strong>
 </div>
-</div>
-
-<div class="card">
-<h2>Record Verified Price</h2>
-<p class="note">
-Enter an AUD-equivalent share price.
-Include currency conversion for overseas stocks.
-Prices are entered manually.
-</p>
-<label>Price per share (A$)</label>
-<input id="priceInput" type="number"
- min="0.000001" step="any"
- placeholder="Price in AUD">
-<label>Source and market timestamp</label>
-<input id="sourceInput"
- placeholder="Exchange, date, time and FX source">
-<button class="primary full" id="savePrice">
-Record Price
-</button>
-</div>
-
-<div class="card">
-<h2>Paper Trading Desk</h2>
-<label>Action</label>
-<select id="side">
-<option value="BUY">Buy</option>
-<option value="SELL">Sell</option>
-</select>
-<label>Shares</label>
-<input id="qty" type="number"
- min="0.000001" step="any"
- placeholder="Quantity">
-<label>Reason for decision</label>
-<input id="reason" placeholder="Trade rationale">
-<button class="primary full" id="submitTrade">
-Record Paper Trade
-</button>
-<p class="note">
-Trades use the last recorded price.
-Fills are simulated, not actual exchange executions.
-Fees are assumed to be A$0.
-</p>
+<p class="note" id="stockNote"></p>
 </div>
 
 <div class="card">
@@ -228,41 +203,48 @@ No trades recorded.
 <div class="card">
 <h2>Risk Rules</h2>
 <div class="row">
-<span>Maximum stock exposure</span><strong>20%</strong>
+<span>Maximum stock allocation</span><strong>20%</strong>
 </div>
 <div class="row">
 <span>Minimum cash reserve</span><strong>30%</strong>
 </div>
 <div class="row">
-<span>Pause new buys at drawdown</span><strong>5%</strong>
+<span>Halt new buys at equity of</span><strong>A$2,500</strong>
 </div>
 <div class="row">
-<span>Emergency halt</span><strong>8%</strong>
+<span>Strategy</span><strong>Equal weight 14% each</strong>
 </div>
+<div class="row">
+<span>Buying status</span><strong id="haltStatus">—</strong>
+</div>
+<p class="note">
+The simulation buys each stock towards 14% of equity
+(70% invested, 30% cash) and trims any position above 20%.
+It only trades while that stock's market is open and its
+verified quote is fresh. Fees are assumed to be A$0.
+</p>
 </div>
 
 <div id="message" class="warning note">
-Waiting for recorded prices and trades.
+Waiting for verified prices.
 </div>
 
 <div class="card">
 <h2>Data &amp; Backup</h2>
 <p class="note">
-Trading records are saved in this browser.
-Export a backup before changing devices or
-clearing browser data.
+All trades, cash, positions and valuations are stored
+in the TradeGuard database and update automatically.
+Prices refresh every 15 minutes on weekdays.
 </p>
 <button id="export">Export Ledger JSON</button>
-<label>Import Ledger JSON</label>
-<input id="importFile" type="file"
- accept="application/json,.json">
 </div>
 
 <footer>
 REVEL TradeGuard · A$5,000 virtual starting capital.
-No real orders. No automatic market-price feed.
-Recorded prices and paper trades determine performance.
-Data may be stale or incomplete.
+Simulated paper trading only. Not connected to any broker
+and no real orders are ever placed.
+Prices from Twelve Data, converted to AUD at the quoted
+FX rate. Quotes may be delayed; check timestamps.
 </footer>
 
 </main>
@@ -270,93 +252,57 @@ Data may be stale or incomplete.
 <script>
 'use strict';
 
-const START=5000;
-const KEY='revel-paper-ledger-v2';
-
-const STOCKS={
- RTX:'RTX Corporation',
- GD:'General Dynamics',
- LMT:'Lockheed Martin',
- 'BA.L':'BAE Systems',
- NOC:'Northrop Grumman'
-};
-
-const SYMBOLS=Object.keys(STOCKS);
 const $=id=>document.getElementById(id);
+const fmt=n=>'A$'+Number(n).toLocaleString('en-AU',
+ {minimumFractionDigits:2,maximumFractionDigits:2});
+const signed=n=>(n>=0?'+':'-')+fmt(Math.abs(n));
+const esc=v=>String(v??'').replaceAll('&','&amp;')
+ .replaceAll('<','&lt;').replaceAll('>','&gt;');
+const when=t=>new Date(t).toLocaleString('en-AU',
+ {dateStyle:'medium',timeStyle:'short'});
 
-const blank=()=>({
- cash:START,
- positions:{},
- prices:{},
- trades:[],
- valuations:[],
- peak:START
-});
-
-const fmt=n=>'A$'+Number(n).toLocaleString(
- 'en-AU',{
- minimumFractionDigits:2,
- maximumFractionDigits:2
-});
-
-let state=blank();
+let data=null;
 let active='ALL';
+let refreshing=false;
 
-try{
- const s=JSON.parse(localStorage.getItem(KEY));
- if(s&&typeof s.cash==='number'&&
- s.positions&&s.prices&&
- Array.isArray(s.trades)&&
- Array.isArray(s.valuations)){
-  state={...blank(),...s};
- }
-}catch(e){}
+const stock=s=>data.stocks.find(x=>x.symbol===s);
+const value=st=>st.shares*(st.price?.priceAud||0);
 
-const shares=s=>Number(state.positions[s]||0);
-const px=s=>Number(state.prices[s]?.value||0);
-const marketValue=s=>shares(s)*px(s);
-
-const equity=()=>state.cash+
- SYMBOLS.reduce((sum,s)=>sum+marketValue(s),0);
-
-const signed=n=>
- (n>=0?'+':'-')+fmt(Math.abs(n));
+function priceState(p){
+ if(!p)return {cls:'',label:'NO PRICE',text:'No verified price yet'};
+ const age=Math.round((Date.now()-new Date(p.quoteTime))/60000);
+ const ageTxt=age<60?`${age} min`:age<2880?
+  `${Math.round(age/60)} h`:`${Math.round(age/1440)} d`;
+ if(!p.marketOpen)return {cls:'closed',label:'MARKET CLOSED',
+  text:`Market closed · last price ${when(p.quoteTime)}`};
+ if(age>5)return {cls:'delayed',label:`DELAYED ${ageTxt}`,
+  text:`Market open · quote delayed ${ageTxt} (${when(p.quoteTime)})`};
+ return {cls:'live',label:'LIVE',
+  text:`Market open · quote ${when(p.quoteTime)}`};
+}
 
 function stockProfit(s){
- const cashflow=state.trades
- .filter(t=>t.symbol===s)
- .reduce((sum,t)=>sum+
- (t.side==='SELL'?t.value:-t.value),0);
- return marketValue(s)+cashflow;
+ const st=stock(s);
+ const flow=data.trades.filter(t=>t.symbol===s)
+  .reduce((a,t)=>a+(t.side==='SELL'?t.valueAud:-t.valueAud),0);
+ return value(st)+flow;
 }
 
-function message(s){
- $('message').textContent=s;
-}
-
-function save(){
- localStorage.setItem(KEY,JSON.stringify(state));
- render();
-}
-
-function stockRow(s){
- const p=state.prices[s];
- const pnl=stockProfit(s);
+function stockRow(st){
+ const ps=priceState(st.price);
+ const pnl=stockProfit(st.symbol);
  return `
  <div class="row">
  <div>
- <strong>${s}</strong>
- <div class="stockname">${STOCKS[s]}</div>
- <div class="stockname">
- ${shares(s).toFixed(4)} shares
- </div>
+ <strong>${esc(st.symbol)}</strong>
+ <span class="tag ${ps.cls}">${ps.label}</span>
+ <div class="stockname">${esc(st.name)}</div>
+ <div class="stockname">${st.shares.toFixed(4)} shares</div>
  </div>
  <div style="text-align:right">
- <strong>
- ${p?fmt(px(s)):'Awaiting price'}
- </strong>
+ <strong>${st.price?fmt(st.price.priceAud):'Awaiting price'}</strong>
  <div class="stockname">
- ${shares(s)?fmt(marketValue(s)):'No position'}
+ ${st.shares?fmt(value(st)):'No position'}
  </div>
  <div class="stockname ${pnl<0?'red':'green'}">
  ${signed(pnl)} P/L
@@ -367,295 +313,165 @@ function stockRow(s){
 
 function historyRows(items){
  if(!items.length)return 'No trades recorded.';
- return items.slice().reverse().map(t=>`
+ return items.map(t=>`
  <div class="row">
  <div>
- <strong>${t.side} ${t.symbol}</strong>
+ <strong>${t.side} ${esc(t.symbol)}</strong>
  <div class="stockname">
- ${t.quantity} shares ·
- ${new Date(t.time).toLocaleString('en-AU')}
+ ${Number(t.shares).toFixed(4)} shares @ ${fmt(t.priceAud)}
+ · ${when(t.executedAt)}
  </div>
  <div class="stockname">
- ${String(t.reason||'')
- .replaceAll('&','&amp;')
- .replaceAll('<','&lt;')}
+ ${t.currency} ${Number(t.priceNative).toFixed(2)} × FX
+ ${Number(t.fxRate).toFixed(4)} · quote ${when(t.quoteTime)}
  </div>
+ <div class="stockname">${esc(t.rule)}</div>
  </div>
- <strong>${fmt(t.value)}</strong>
- </div>
- `).join('');
+ <strong>${fmt(t.valueAud)}</strong>
+ </div>`).join('');
 }
 
 function chart(){
- const data=[
- {value:START},
- ...state.valuations
- ].filter(v=>Number.isFinite(v.value));
-
- if(data.length<2){
+ const h=data.equityHistory;
+ if(h.length<2){
   $('chart').innerHTML='';
-  $('chartLabel').textContent=
-   'No recorded valuations yet.';
+  $('chartLabel').textContent=h.length?
+   '1 recorded valuation so far.':'No recorded valuations yet.';
   return;
  }
-
- const vals=data.map(v=>v.value);
- const lo=Math.min(...vals)-1;
- const hi=Math.max(...vals)+1;
-
- const pts=vals.map((v,i)=>{
-  const x=12+i*316/(vals.length-1);
-  const y=135-(v-lo)/(hi-lo)*112;
-  return `${x},${y}`;
- }).join(' ');
-
+ const vals=h.map(v=>v.equity);
+ const lo=Math.min(...vals,data.rules.startCapital)-1;
+ const hi=Math.max(...vals,data.rules.startCapital)+1;
+ const y=v=>135-(v-lo)/(hi-lo)*112;
+ const pts=vals.map((v,i)=>
+  `${12+i*316/(vals.length-1)},${y(v)}`).join(' ');
  $('chart').innerHTML=`
- <line x1="12" y1="135" x2="328" y2="135"
- stroke="#42516a"/>
- <polyline points="${pts}" fill="none"
- stroke="#e8c27a" stroke-width="3"
- stroke-linejoin="round"/>`;
-
+ <line x1="12" y1="135" x2="328" y2="135" stroke="#42516a"/>
+ <line x1="12" y1="${y(data.rules.startCapital)}" x2="328"
+ y2="${y(data.rules.startCapital)}" stroke="#42516a"
+ stroke-dasharray="4 4"/>
+ <polyline points="${pts}" fill="none" stroke="#e8c27a"
+ stroke-width="3" stroke-linejoin="round"/>`;
  $('chartLabel').textContent=
- `${state.valuations.length} recorded valuations.
- Not a continuous live feed.`;
+  `${h.length} recorded valuations from ${when(h[0].recordedAt)}
+  to ${when(h[h.length-1].recordedAt)}. Dashed line: A$5,000 start.`;
 }
 
 function render(){
- const e=equity();
- const pl=e-START;
-
- $('equity').textContent=fmt(e);
+ if(!data)return;
+ const a=data.account;
+ $('equity').textContent=fmt(a.equity);
  $('totalPL').textContent=
- `${signed(pl)} (${(pl/START*100).toFixed(2)}%)`;
- $('totalPL').className=pl<0?'red':'green';
- $('cash').textContent=fmt(state.cash);
-
- $('openCount').textContent=
- SYMBOLS.filter(s=>shares(s)>0).length;
-
- $('allStocks').innerHTML=
- SYMBOLS.map(stockRow).join('');
-
- $('allHistory').innerHTML=
- historyRows(state.trades);
-
+  `${signed(a.profitLoss)} (${(a.profitLoss/a.startingCapital*100).toFixed(2)}%)`;
+ $('totalPL').className=a.profitLoss<0?'red':'green';
+ $('cash').textContent=fmt(a.cash);
+ $('openCount').textContent=data.stocks.filter(s=>s.shares>0).length;
+ $('allStocks').innerHTML=data.stocks.map(stockRow).join('');
+ $('allHistory').innerHTML=historyRows(data.trades);
+ $('haltStatus').textContent=a.buysHalted?
+  'HALTED (equity ≤ A$2,500)':'Active';
+ $('haltStatus').className=a.buysHalted?'red':'green';
  chart();
 
- $('allPanel').classList.toggle(
- 'hidden',active!=='ALL'
- );
- $('stockPanel').classList.toggle(
- 'hidden',active==='ALL'
- );
+ $('allPanel').classList.toggle('hidden',active!=='ALL');
+ $('stockPanel').classList.toggle('hidden',active==='ALL');
+ document.querySelectorAll('#tabs button').forEach(b=>
+  b.classList.toggle('active',b.dataset.tab===active));
 
- document.querySelectorAll('#tabs button')
- .forEach(b=>{
-  b.classList.toggle(
-   'active',b.dataset.tab===active
-  );
- });
+ const r=data.lastRun;
+ const anyOpen=data.stocks.some(s=>s.price?.marketOpen);
+ $('feedStatus').textContent=!data.providerConfigured?
+  'Price feed not configured':
+  !r?'Awaiting first price refresh':
+  `Last refresh ${when(r.startedAt)} · ${r.message||r.status}`+
+  (data.stocks.some(s=>s.price)&&!anyOpen?' · Markets closed':'');
+ $('updated').textContent=`Dashboard updated ${
+  new Date(data.serverTime).toLocaleTimeString('en-AU')}`;
+
+ const notes=r?.notes||[];
+ $('message').textContent=a.buysHalted?
+  'BUYS HALTED: portfolio equity is at or below A$2,500. Only trims are allowed.':
+  r?.status==='error'?`Last refresh failed: ${r.message||'unknown error'}. No trades were made.`:
+  notes.length?notes.join(' '):
+  r?'Latest refresh completed. All figures come from recorded verified prices and simulated trades.':
+  'Waiting for verified prices. No trades are made until real prices are recorded.';
 
  if(active!=='ALL'){
-  const s=active;
-  const p=state.prices[s];
-
-  $('stockTitle').textContent=
-   `${s} · ${STOCKS[s]}`;
-
-  $('stockPrice').textContent=
-   p?fmt(px(s)):'Awaiting price';
-
+  const st=stock(active), p=st.price, ps=priceState(p);
+  const e=a.equity, alloc=e>0?value(st)/e*100:0;
+  $('stockTitle').textContent=`${st.symbol} · ${st.name}`;
+  $('stockPrice').textContent=p?fmt(p.priceAud):'Awaiting price';
+  $('stockMarket').innerHTML=`<span class="tag ${ps.cls}">${ps.label}</span> ${esc(ps.text)}`;
+  $('stockNative').textContent=p?
+   `${p.currency} ${p.priceNative.toFixed(2)} · ${p.providerSymbol} on ${p.exchange}`:'—';
+  $('stockFx').textContent=p?
+   `${p.fxPair} ${p.fxRate.toFixed(5)} (rate time ${when(p.fxTime)})`:'—';
   $('stockSource').textContent=p?
-   `${p.source} (recorded ${
-    new Date(p.recorded).toLocaleString('en-AU')
-   })`:'Not connected';
-
-  $('stockShares').textContent=
-   shares(s).toFixed(4);
-
-  $('stockValue').textContent=
-   fmt(marketValue(s));
-
-  $('stockPL').textContent=
-   signed(stockProfit(s));
-
-  $('stockHistory').innerHTML=
-   historyRows(state.trades.filter(
-    t=>t.symbol===s
-   ));
+   `${p.source}, fetched ${when(p.fetchedAt)}`:'Not connected';
+  $('stockShares').textContent=st.shares.toFixed(4);
+  $('stockValue').textContent=fmt(value(st));
+  $('stockAlloc').textContent=`${alloc.toFixed(1)}% (14% / 20%)`;
+  $('stockPL').textContent=signed(stockProfit(st.symbol));
+  $('stockPL').className=stockProfit(st.symbol)<0?'red':'green';
+  $('stockNote').textContent=st.note;
+  $('stockHistory').innerHTML=historyRows(
+   data.trades.filter(t=>t.symbol===st.symbol));
  }
 }
 
-function show(s){
- active=s;
- render();
+async function load(){
+ try{
+  const res=await fetch('/api/dashboard',{cache:'no-store'});
+  if(!res.ok)throw Error('HTTP '+res.status);
+  data=await res.json();
+  if(!$('tabs').children.length)buildTabs();
+  render();
+  maybeRefresh();
+ }catch(err){
+  $('feedStatus').textContent='Dashboard offline: '+err.message+
+   ' · showing last loaded data';
+ }
 }
 
-$('tabs').innerHTML=
- ['ALL',...SYMBOLS].map(s=>`
- <button type="button" data-tab="${s}">
- ${s==='ALL'?'ALL STOCKS':
- s==='BA.L'?'BAE':s}
- </button>
- `).join('');
+async function maybeRefresh(){
+ if(refreshing||!data.providerConfigured)return;
+ const last=data.lastRun?new Date(data.lastRun.startedAt):0;
+ if(last&&Date.now()-last<(data.rules.refreshIntervalMin+1)*60000)return;
+ refreshing=true;
+ try{
+  const r=await fetch('/api/refresh',{method:'POST'})
+   .then(r=>r.json());
+  if(r.ran)await load();
+ }catch(e){}
+ refreshing=false;
+}
+
+function buildTabs(){
+ $('tabs').innerHTML=['ALL',...data.stocks.map(s=>s.symbol)]
+  .map(s=>`<button type="button" data-tab="${s}">
+  ${s==='ALL'?'ALL STOCKS':s}</button>`).join('');
+}
 
 $('tabs').addEventListener('click',e=>{
  const b=e.target.closest('button[data-tab]');
- if(b)show(b.dataset.tab);
+ if(b){active=b.dataset.tab;render();}
 });
 
-$('savePrice').addEventListener('click',()=>{
- const s=active;
- const p=Number($('priceInput').value);
- const source=$('sourceInput').value.trim();
-
- if(!Number.isFinite(p)||p<=0||!source){
-  message('Enter a valid price and source.');
-  return;
- }
-
- state.prices[s]={
-  value:p,
-  source,
-  recorded:new Date().toISOString()
- };
-
- const e=equity();
- state.peak=Math.max(state.peak,e);
- state.valuations.push({
-  time:new Date().toISOString(),
-  value:e
- });
-
- save();
- message(`Recorded ${s} at ${fmt(p)}.
- Manual price, not a live quote.`);
-});
-
-$('submitTrade').addEventListener('click',()=>{
- const s=active;
- const side=$('side').value;
- const q=Number($('qty').value);
- const reason=$('reason').value.trim();
- const p=px(s);
-
- if(!Number.isFinite(q)||q<=0||!p||!reason){
-  message('Enter quantity, reason and price.');
-  return;
- }
-
- const value=q*p;
- const e=equity();
- const drawdown=state.peak>0?
-  (state.peak-e)/state.peak:0;
-
- if(drawdown>=.08){
-  message('EMERGENCY HALT: 8% drawdown.');
-  return;
- }
-
- if(side==='BUY'){
-  if(drawdown>=.05){
-   message('BUY BLOCKED: 5% drawdown.');
-   return;
-  }
-
-  if(value>state.cash-START*.30+1e-7){
-   message('BUY BLOCKED: 30% cash reserve.');
-   return;
-  }
-
-  if(marketValue(s)+value>e*.20+1e-7){
-   message('BUY BLOCKED: 20% stock limit.');
-   return;
-  }
-
-  state.cash-=value;
-  state.positions[s]=shares(s)+q;
-
- }else{
-  if(q>shares(s)+1e-7){
-   message('SELL BLOCKED: insufficient shares.');
-   return;
-  }
-
-  state.cash+=value;
-  state.positions[s]=Math.max(0,shares(s)-q);
- }
-
- state.trades.push({
-  time:new Date().toISOString(),
-  symbol:s,
-  side,
-  quantity:q,
-  price:p,
-  value,
-  reason,
-  source:state.prices[s].source
- });
-
- state.valuations.push({
-  time:new Date().toISOString(),
-  value:equity()
- });
-
- state.peak=Math.max(state.peak,equity());
-
- save();
-
- message(`${side} ${q} ${s} at ${fmt(p)}
- recorded as a paper trade.`);
-});
-
-$('export').addEventListener('click',()=>{
- const blob=new Blob([
-  JSON.stringify({
-   format:'REVEL-paper-v2',
-   exported:new Date().toISOString(),
-   state
-  },null,2)
- ],{type:'application/json'});
-
+$('export').addEventListener('click',async()=>{
+ const res=await fetch('/api/dashboard?full=1',{cache:'no-store'});
+ const ledger=await res.json();
+ const blob=new Blob([JSON.stringify({
+  format:'REVEL-paper-v3',exported:new Date().toISOString(),ledger
+ },null,2)],{type:'application/json'});
  const url=URL.createObjectURL(blob);
  const a=document.createElement('a');
- a.href=url;
- a.download='revel-tradeguard-ledger.json';
- a.click();
-
+ a.href=url;a.download='revel-tradeguard-ledger.json';a.click();
  setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 
-$('importFile').addEventListener('change',
- async e=>{
- const f=e.target.files?.[0];
- if(!f)return;
-
- try{
-  const obj=JSON.parse(await f.text());
-  const s=obj.state;
-
-  if(!s||typeof s.cash!=='number'||
-   !s.positions||!s.prices||
-   !Array.isArray(s.trades)||
-   !Array.isArray(s.valuations)){
-   throw Error('Invalid ledger');
-  }
-
-  if(!confirm('Replace existing ledger?'))return;
-
-  state={...blank(),...s};
-  save();
-  message('Ledger restored.');
-
- }catch(err){
-  message('Import failed: '+err.message);
- }
-
- e.target.value='';
-});
-
-render();
+load();
+setInterval(load,60000);
+setInterval(render,30000);
 </script>
 </body>
 </html>
