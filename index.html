@@ -100,13 +100,42 @@ footer{
   font-size:12px;line-height:1.6;
 }
 .tag{
-  display:inline-block;fon<header>
+  display:inline-block;font-size:10px;font-weight:700;
+  letter-spacing:.04em;padding:3px 6px;margin-left:6px;
+  border-radius:6px;border:1px solid var(--line);
+  color:var(--muted);vertical-align:middle;
+}
+.tag.live{color:var(--green);border-color:var(--green)}
+.tag.delayed{color:var(--gold);border-color:var(--gold)}
+.tag.closed{color:var(--muted)}
+.status{
+  display:flex;flex-wrap:wrap;justify-content:space-between;
+  gap:6px 12px;font-size:12px;color:var(--muted);
+}
+.alert{
+  background:#3a1f24;border:1px solid #7a3a44;color:#ffd5d5;
+  padding:12px;border-radius:10px;margin:10px 0;
+  font-size:13px;line-height:1.5;
+}
+.alert button{margin-top:8px;padding:7px 11px}
+</style>
+</head>
+<body>
+<main>
+
+<header>
 <h1>REVEL / TRADEGUARD</h1>
 <span class="badge">PAPER TRADING</span>
 </header>
 <div class="status">
 <span id="feedStatus">Connecting…</span>
 <span id="updated"></span>
+</div>
+
+<div id="connection" class="alert hidden" role="alert">
+<strong>Connection problem.</strong>
+<span id="connectionText"></span>
+<div><button type="button" id="retry">Retry now</button></div>
 </div>
 
 <nav id="tabs" class="tabs"></nav>
@@ -253,9 +282,10 @@ FX rate. Quotes may be delayed; check timestamps.
 'use strict';
 
 const $=id=>document.getElementById(id);
-const fmt=n=>'A$'+Number(n).toLocaleString('en-AU',
+const ok=n=>n!==null&&n!==undefined&&Number.isFinite(Number(n));
+const fmt=n=>!ok(n)?'—':'A$'+Number(n).toLocaleString('en-AU',
  {minimumFractionDigits:2,maximumFractionDigits:2});
-const signed=n=>(n>=0?'+':'-')+fmt(Math.abs(n));
+const signed=n=>!ok(n)?'—':(n>=0?'+':'-')+fmt(Math.abs(n));
 const esc=v=>String(v??'').replaceAll('&','&amp;')
  .replaceAll('<','&lt;').replaceAll('>','&gt;');
 const when=t=>new Date(t).toLocaleString('en-AU',
@@ -264,9 +294,35 @@ const when=t=>new Date(t).toLocaleString('en-AU',
 let data=null;
 let active='ALL';
 let refreshing=false;
+let lastError=null;
+
+// Static configuration only (symbols, names, rules) so navigation and the
+// layout can render while the server is unreachable. No prices, cash,
+// positions or trades are invented: those show as unavailable.
+const OFFLINE_STOCKS=[
+ {symbol:'LMT',name:'Lockheed Martin',note:'NYSE'},
+ {symbol:'RTX',name:'RTX Corporation',note:'NYSE'},
+ {symbol:'GD',name:'General Dynamics',note:'NYSE'},
+ {symbol:'NOC',name:'Northrop Grumman',note:'NYSE'},
+ {symbol:'BAE',name:'BAE Systems',note:'US-listed ADR BAESY (1 ADR = 4 ordinary shares).'},
+];
+function offlineData(){
+ return {
+  offline:true,serverTime:null,providerConfigured:false,
+  rules:{startCapital:5000,refreshIntervalMin:14},
+  account:{cash:null,startingCapital:5000,equity:null,positionsValue:null,
+   profitLoss:null,buysHalted:false},
+  stocks:OFFLINE_STOCKS.map(s=>({...s,shares:null,price:null})),
+  trades:[],equityHistory:[],lastRun:null,
+ };
+}
+function validData(d){
+ return d&&typeof d==='object'&&d.account&&Array.isArray(d.stocks)&&
+  Array.isArray(d.trades)&&Array.isArray(d.equityHistory)&&d.rules;
+}
 
 const stock=s=>data.stocks.find(x=>x.symbol===s);
-const value=st=>st.shares*(st.price?.priceAud||0);
+const value=st=>ok(st.shares)?st.shares*(st.price?.priceAud||0):null;
 
 function priceState(p){
  if(!p)return {cls:'',label:'NO PRICE',text:'No verified price yet'};
@@ -283,6 +339,7 @@ function priceState(p){
 
 function stockProfit(s){
  const st=stock(s);
+ if(data.offline||!ok(st.shares))return null;
  const flow=data.trades.filter(t=>t.symbol===s)
   .reduce((a,t)=>a+(t.side==='SELL'?t.valueAud:-t.valueAud),0);
  return value(st)+flow;
@@ -297,14 +354,14 @@ function stockRow(st){
  <strong>${esc(st.symbol)}</strong>
  <span class="tag ${ps.cls}">${ps.label}</span>
  <div class="stockname">${esc(st.name)}</div>
- <div class="stockname">${st.shares.toFixed(4)} shares</div>
+ <div class="stockname">${ok(st.shares)?st.shares.toFixed(4)+' shares':'Holdings unavailable'}</div>
  </div>
  <div style="text-align:right">
- <strong>${st.price?fmt(st.price.priceAud):'Awaiting price'}</strong>
+ <strong>${st.price?fmt(st.price.priceAud):data.offline?'Price unavailable':'Awaiting price'}</strong>
  <div class="stockname">
- ${st.shares?fmt(value(st)):'No position'}
+ ${!ok(st.shares)?'—':st.shares?fmt(value(st)):'No position'}
  </div>
- <div class="stockname ${pnl<0?'red':'green'}">
+ <div class="stockname ${!ok(pnl)?'':pnl<0?'red':'green'}">
  ${signed(pnl)} P/L
  </div>
  </div>
@@ -312,6 +369,7 @@ function stockRow(st){
 }
 
 function historyRows(items){
+ if(data.offline)return 'Trade history unavailable while disconnected.';
  if(!items.length)return 'No trades recorded.';
  return items.map(t=>`
  <div class="row">
@@ -335,7 +393,8 @@ function chart(){
  const h=data.equityHistory;
  if(h.length<2){
   $('chart').innerHTML='';
-  $('chartLabel').textContent=h.length?
+  $('chartLabel').textContent=data.offline?
+   'Portfolio history unavailable while disconnected.':h.length?
    '1 recorded valuation so far.':'No recorded valuations yet.';
   return;
  }
@@ -359,18 +418,33 @@ function chart(){
 
 function render(){
  if(!data)return;
+ try{renderInner();}
+ catch(err){
+  console.error('render failed',err);
+  showConnection('The dashboard received data it could not display ('+
+   err.message+').');
+ }
+}
+
+function showConnection(msg){
+ $('connection').classList.toggle('hidden',!msg);
+ $('connectionText').textContent=msg||'';
+}
+
+function renderInner(){
  const a=data.account;
  $('equity').textContent=fmt(a.equity);
- $('totalPL').textContent=
+ $('totalPL').textContent=!ok(a.profitLoss)?'Unavailable':
   `${signed(a.profitLoss)} (${(a.profitLoss/a.startingCapital*100).toFixed(2)}%)`;
- $('totalPL').className=a.profitLoss<0?'red':'green';
+ $('totalPL').className=!ok(a.profitLoss)?'muted':a.profitLoss<0?'red':'green';
  $('cash').textContent=fmt(a.cash);
- $('openCount').textContent=data.stocks.filter(s=>s.shares>0).length;
+ $('openCount').textContent=data.offline?'—':
+  data.stocks.filter(s=>s.shares>0).length;
  $('allStocks').innerHTML=data.stocks.map(stockRow).join('');
  $('allHistory').innerHTML=historyRows(data.trades);
- $('haltStatus').textContent=a.buysHalted?
-  'HALTED (equity ≤ A$2,500)':'Active';
- $('haltStatus').className=a.buysHalted?'red':'green';
+ $('haltStatus').textContent=data.offline?'Unknown (disconnected)':
+  a.buysHalted?'HALTED (equity ≤ A$2,500)':'Active';
+ $('haltStatus').className=data.offline?'muted':a.buysHalted?'red':'green';
  chart();
 
  $('allPanel').classList.toggle('hidden',active!=='ALL');
@@ -380,16 +454,19 @@ function render(){
 
  const r=data.lastRun;
  const anyOpen=data.stocks.some(s=>s.price?.marketOpen);
- $('feedStatus').textContent=!data.providerConfigured?
+ $('feedStatus').textContent=data.offline?'Disconnected from TradeGuard server':
+  !data.providerConfigured?
   'Price feed not configured':
   !r?'Awaiting first price refresh':
   `Last refresh ${when(r.startedAt)} · ${r.message||r.status}`+
   (data.stocks.some(s=>s.price)&&!anyOpen?' · Markets closed':'');
- $('updated').textContent=`Dashboard updated ${
-  new Date(data.serverTime).toLocaleTimeString('en-AU')}`;
+ $('updated').textContent=data.serverTime?`Dashboard updated ${
+  new Date(data.serverTime).toLocaleTimeString('en-AU')}`:'';
 
  const notes=r?.notes||[];
- $('message').textContent=a.buysHalted?
+ $('message').textContent=data.offline?
+  'Portfolio data could not be loaded. No figures are shown until the connection is restored. No trades are made from this page.':
+  a.buysHalted?
   'BUYS HALTED: portfolio equity is at or below A$2,500. Only trims are allowed.':
   r?.status==='error'?`Last refresh failed: ${r.message||'unknown error'}. No trades were made.`:
   notes.length?notes.join(' '):
@@ -397,10 +474,12 @@ function render(){
   'Waiting for verified prices. No trades are made until real prices are recorded.';
 
  if(active!=='ALL'){
-  const st=stock(active), p=st.price, ps=priceState(p);
-  const e=a.equity, alloc=e>0?value(st)/e*100:0;
+  const st=stock(active);
+  if(!st){active='ALL';return renderInner();}
+  const p=st.price, ps=priceState(p);
+  const e=a.equity, alloc=e>0&&ok(value(st))?value(st)/e*100:0;
   $('stockTitle').textContent=`${st.symbol} · ${st.name}`;
-  $('stockPrice').textContent=p?fmt(p.priceAud):'Awaiting price';
+  $('stockPrice').textContent=p?fmt(p.priceAud):data.offline?'Price unavailable':'Awaiting price';
   $('stockMarket').innerHTML=`<span class="tag ${ps.cls}">${ps.label}</span> ${esc(ps.text)}`;
   $('stockNative').textContent=p?
    `${p.currency} ${p.priceNative.toFixed(2)} · ${p.providerSymbol} on ${p.exchange}`:'—';
@@ -408,33 +487,60 @@ function render(){
    `${p.fxPair} ${p.fxRate.toFixed(5)} (rate time ${when(p.fxTime)})`:'—';
   $('stockSource').textContent=p?
    `${p.source}, fetched ${when(p.fetchedAt)}`:'Not connected';
-  $('stockShares').textContent=st.shares.toFixed(4);
+  $('stockShares').textContent=ok(st.shares)?st.shares.toFixed(4):'—';
   $('stockValue').textContent=fmt(value(st));
-  $('stockAlloc').textContent=`${alloc.toFixed(1)}% (14% / 20%)`;
-  $('stockPL').textContent=signed(stockProfit(st.symbol));
-  $('stockPL').className=stockProfit(st.symbol)<0?'red':'green';
+  const spl=stockProfit(st.symbol);
+  $('stockAlloc').textContent=ok(e)&&ok(st.shares)?
+   `${alloc.toFixed(1)}% (14% / 20%)`:'— (14% / 20%)';
+  $('stockPL').textContent=signed(spl);
+  $('stockPL').className=!ok(spl)?'':spl<0?'red':'green';
   $('stockNote').textContent=st.note;
   $('stockHistory').innerHTML=historyRows(
    data.trades.filter(t=>t.symbol===st.symbol));
  }
 }
 
+async function fetchDashboard(){
+ const ctl=new AbortController();
+ const timer=setTimeout(()=>ctl.abort(),15000);
+ try{
+  const res=await fetch('/api/dashboard',{cache:'no-store',signal:ctl.signal});
+  let body=null;
+  try{body=await res.json();}catch(e){}
+  if(!res.ok)throw Error(body?.message||('server responded HTTP '+res.status));
+  if(!validData(body))throw Error('unexpected response from server');
+  return body;
+ }catch(err){
+  if(err.name==='AbortError')throw Error('request timed out');
+  if(err instanceof TypeError)throw Error('network unreachable');
+  throw err;
+ }finally{clearTimeout(timer);}
+}
+
 async function load(){
  try{
-  const res=await fetch('/api/dashboard',{cache:'no-store'});
-  if(!res.ok)throw Error('HTTP '+res.status);
-  data=await res.json();
-  if(!$('tabs').children.length)buildTabs();
+  const fresh=await fetchDashboard();
+  const rebuild=!data||data.offline;
+  data=fresh;lastError=null;
+  if(rebuild)buildTabs();
+  showConnection(null);
   render();
   maybeRefresh();
  }catch(err){
-  $('feedStatus').textContent='Dashboard offline: '+err.message+
-   ' · showing last loaded data';
+  lastError=err.message;
+  console.error('dashboard load failed',err);
+  const hadData=data&&!data.offline;
+  if(!data){data=offlineData();buildTabs();}
+  render();
+  showConnection(hadData?
+   `Could not reach the TradeGuard server (${err.message}). Showing the last loaded data from ${when(data.serverTime)}. Retrying automatically every minute.`:
+   `Could not load portfolio data (${err.message}). The market-data service or database may be unavailable. Retrying automatically every minute.`);
+  if(hadData)$('feedStatus').textContent='Dashboard offline · showing last loaded data';
  }
 }
 
 async function maybeRefresh(){
- if(refreshing||!data.providerConfigured)return;
+ if(refreshing||!data||data.offline||!data.providerConfigured)return;
  const last=data.lastRun?new Date(data.lastRun.startedAt):0;
  if(last&&Date.now()-last<(data.rules.refreshIntervalMin+1)*60000)return;
  refreshing=true;
@@ -447,7 +553,7 @@ async function maybeRefresh(){
 }
 
 function buildTabs(){
- $('tabs').innerHTML=['ALL',...data.stocks.map(s=>s.symbol)]
+ $('tabs').innerHTML=['ALL',...data.stocks.map(s=>esc(s.symbol))]
   .map(s=>`<button type="button" data-tab="${s}">
   ${s==='ALL'?'ALL STOCKS':s}</button>`).join('');
 }
@@ -457,9 +563,19 @@ $('tabs').addEventListener('click',e=>{
  if(b){active=b.dataset.tab;render();}
 });
 
+$('retry').addEventListener('click',()=>load());
+
 $('export').addEventListener('click',async()=>{
- const res=await fetch('/api/dashboard?full=1',{cache:'no-store'});
- const ledger=await res.json();
+ let ledger;
+ try{
+  const res=await fetch('/api/dashboard?full=1',{cache:'no-store'});
+  if(!res.ok)throw Error('HTTP '+res.status);
+  ledger=await res.json();
+  if(!validData(ledger))throw Error('unexpected response');
+ }catch(err){
+  showConnection('Ledger export failed: '+err.message+'. Please try again once connected.');
+  return;
+ }
  const blob=new Blob([JSON.stringify({
   format:'REVEL-paper-v3',exported:new Date().toISOString(),ledger
  },null,2)],{type:'application/json'});
