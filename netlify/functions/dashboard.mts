@@ -1,15 +1,15 @@
-import type { Config } from "@netlify/functions";
+import type { Config, Context } from "@netlify/functions";
 import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { account, positions, trades, equitySnapshots, fetchRuns } from "../../db/schema.js";
 import {
   STOCKS, START_CAPITAL, MAX_ALLOCATION, TARGET_ALLOCATION, MIN_CASH_RESERVE, BUY_HALT_EQUITY,
-  REFRESH_INTERVAL_MIN, SCHEDULE_CRON, latestPrices,
+  REFRESH_INTERVAL_MIN, SCHEDULE_CRON, latestPrices, autoTradingEnabled,
 } from "../../lib/simulation.js";
 
-export default async (req: Request) => {
+export default async (req: Request, context: Context) => {
   try {
-    return await buildDashboard(req);
+    return await buildDashboard(req, (context as any)?.deploy?.context ?? null);
   } catch (err) {
     console.error("dashboard failed", err);
     return Response.json(
@@ -19,13 +19,14 @@ export default async (req: Request) => {
   }
 };
 
-async function buildDashboard(req: Request) {
+async function buildDashboard(req: Request, deployContext: string | null) {
   const full = new URL(req.url).searchParams.get("full") === "1";
   const [acctRows, posRows, prices, tradeRows, history, runs, okRuns, schedRuns] = await Promise.all([
     db.select().from(account).limit(1),
     db.select().from(positions),
     latestPrices(),
-    db.select().from(trades).orderBy(desc(trades.executedAt), desc(trades.id)).limit(full ? 100000 : 300),
+    // Every simulated trade is returned so the ledger and per-stock P/L are complete.
+    db.select().from(trades).orderBy(desc(trades.executedAt), desc(trades.id)),
     db.select().from(equitySnapshots).orderBy(desc(equitySnapshots.recordedAt)).limit(full ? 100000 : 400),
     db.select().from(fetchRuns).orderBy(desc(fetchRuns.startedAt)).limit(1),
     db.select().from(fetchRuns).where(inArray(fetchRuns.status, ["ok", "partial"]))
@@ -45,6 +46,8 @@ async function buildDashboard(req: Request) {
     serverTime: new Date().toISOString(),
     initialized: Boolean(acct),
     providerConfigured: Boolean(process.env.TWELVE_DATA_API_KEY),
+    autoTrading: autoTradingEnabled(),
+    deployContext,
     rules: {
       startCapital: START_CAPITAL, maxAllocation: MAX_ALLOCATION, targetAllocation: TARGET_ALLOCATION,
       minCashReserve: MIN_CASH_RESERVE, buyHaltEquity: BUY_HALT_EQUITY, refreshIntervalMin: REFRESH_INTERVAL_MIN,

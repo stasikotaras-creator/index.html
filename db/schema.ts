@@ -1,5 +1,5 @@
 import {
-  pgTable, serial, text, timestamp, integer, doublePrecision, boolean, jsonb, index,
+  pgTable, serial, text, timestamp, integer, doublePrecision, boolean, jsonb, index, uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 // Single paper-trading account (id = 1). Cash is virtual AUD.
@@ -46,7 +46,11 @@ export const priceSnapshots = pgTable("price_snapshots", {
   marketOpen: boolean("market_open").notNull(),
   source: text().notNull(),
   fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
-}, (t) => [index("price_snapshots_symbol_idx").on(t.symbol, t.fetchedAt)]);
+}, (t) => [
+  index("price_snapshots_symbol_idx").on(t.symbol, t.fetchedAt),
+  // One verified price per stock per run.
+  uniqueIndex("price_snapshots_run_symbol_uq").on(t.runId, t.symbol),
+]);
 
 export const trades = pgTable("trades", {
   id: serial().primaryKey(),
@@ -65,7 +69,14 @@ export const trades = pgTable("trades", {
   rule: text().notNull(),
   cashAfter: doublePrecision("cash_after").notNull(),
   equityAtTrade: doublePrecision("equity_at_trade").notNull(),
-});
+}, (t) => [
+  // Duplicate-order guards enforced by the database itself:
+  // at most one simulated order per stock per run, and each verified price fills at most one order.
+  uniqueIndex("trades_run_symbol_uq").on(t.runId, t.symbol),
+  uniqueIndex("trades_snapshot_uq").on(t.snapshotId),
+  // ...and a given market quote can fill at most one order for that stock, even across concurrent runs.
+  uniqueIndex("trades_symbol_quote_uq").on(t.symbol, t.quoteTime),
+]);
 
 export const equitySnapshots = pgTable("equity_snapshots", {
   id: serial().primaryKey(),
@@ -76,4 +87,7 @@ export const equitySnapshots = pgTable("equity_snapshots", {
   equity: doublePrecision().notNull(),
   profitLoss: doublePrecision("profit_loss").notNull(),
   buysHalted: boolean("buys_halted").notNull(),
-}, (t) => [index("equity_snapshots_recorded_idx").on(t.recordedAt)]);
+}, (t) => [
+  index("equity_snapshots_recorded_idx").on(t.recordedAt),
+  uniqueIndex("equity_snapshots_run_uq").on(t.runId),
+]);

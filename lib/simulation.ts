@@ -1,6 +1,6 @@
 // REVEL TradeGuard paper-trading engine.
 // Simulated fills only. There is no broker integration and no real orders are ever sent.
-import { sql, eq, desc } from "drizzle-orm";
+import { sql, eq, desc, and, gte, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   account, positions, fetchRuns, priceSnapshots, trades, equitySnapshots,
@@ -31,6 +31,11 @@ export const STOCKS = [
   },
 ] as const;
 
+// Autonomous simulated trading is ON unless PAPER_TRADING_ENABLED is explicitly "false" (emergency pause:
+// prices are still recorded, but no simulated orders are placed). Real-money trading does not exist here.
+export const autoTradingEnabled = () => process.env.PAPER_TRADING_ENABLED?.trim().toLowerCase() !== "false";
+export const REAL_MONEY_TRADING = false as const;
+
 const SOURCE = "Twelve Data";
 const API = "https://api.twelvedata.com";
 const LOCK_KEY = 7271001;
@@ -42,17 +47,19 @@ export type Quote = {
   priceNative: number; quoteTime: Date; marketOpen: boolean;
 };
 
-async function getJson(url: string) {
-  const res = await fetch(url, { headers: { accept: "application/json" } });
+type FetchFn = typeof fetch;
+
+async function getJson(url: string, fetchImpl: FetchFn = fetch) {
+  const res = await fetchImpl(url, { headers: { accept: "application/json" } });
   const body = await res.json().catch(() => null);
   if (!res.ok || !body) throw new Error(`Provider HTTP ${res.status}`);
   if (body.status === "error") throw new Error(`Provider: ${body.message ?? "error"}`);
   return body;
 }
 
-async function fetchQuotes(key: string, notes: string[]): Promise<Quote[]> {
+async function fetchQuotes(key: string, notes: string[], fetchImpl: FetchFn): Promise<Quote[]> {
   const symbols = STOCKS.map((s) => s.providerSymbol).join(",");
-  const body = await getJson(`${API}/quote?symbol=${encodeURIComponent(symbols)}&apikey=${encodeURIComponent(key)}`);
+  const body = await getJson(`${API}/quote?symbol=${encodeURIComponent(symbols)}&apikey=${encodeURIComponent(key)}`, fetchImpl);
   const out: Quote[] = [];
   for (const s of STOCKS) {
     const q = body[s.providerSymbol];
@@ -84,13 +91,13 @@ async function fetchQuotes(key: string, notes: string[]): Promise<Quote[]> {
 
 export type FxRates = Record<string, { rate: number; time: Date; pair: string }>;
 
-async function fetchFx(key: string, currencies: string[]) {
+async function fetchFx(key: string, currencies: string[], fetchImpl: FetchFn) {
   const pairs = currencies.filter((c) => c !== "AUD").map((c) => `${c}/AUD`);
   const rates: FxRates = {
     AUD: { rate: 1, time: new Date(), pair: "AUD/AUD" },
   };
   if (!pairs.length) return rates;
-  const body = await getJson(`${API}/exchange_rate?symbol=${encodeURIComponent(pairs.join(","))}&apikey=${encodeURIComponent(key)}`);
+  const body = await getJson(`${API}/exchange_rate?symbol=${encodeURIComponent(pairs.join(","))}&apikey=${encodeURIComponent(key)}`, fetchImpl);
   for (const pair of pairs) {
     const r = pairs.length === 1 ? body : body[pair];
     const rate = Number(r?.rate);
@@ -104,18 +111,24 @@ async function fetchFx(key: string, currencies: string[]) {
 
 export type RunResult = { ran: boolean; reason?: string; runId?: number; status?: string; notes?: string[] };
 
-export async function runCycle(trigger: "schedule" | "dashboard" | "manual"): Promise<RunResult> {
-  const key = process.env.TWELVE_DATA_API_KEY;
+// Dependencies are injectable so the isolated end-to-end test can run this exact code path against a
+// throwaway database. In production they default to the Netlify database and the real provider.
+export type CycleDeps = { conn?: any; fetchImpl?: FetchFn; apiKey?: string; now?: () => Date; source?: string };
+
+export async function runCycle(trigger: "schedule" | "dashboard" | "manual" | "test", deps: CycleDeps = {}): Promise<RunResult> {
+  const conn = deps.conn ?? db;
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const key = deps.apiKey ?? process.env.TWELVE_DATA_API_KEY;
   if (!key) return { ran: false, reason: "Market data provider is not configured." };
 
-  return db.transaction(async (tx) => {
+  return conn.transaction(async (tx: any) => {
     // One refresh at a time across all function instances.
     const lock = await tx.execute(sql`select pg_try_advisory_xact_lock(${LOCK_KEY}) as ok`);
     const lockRows = ((lock as any).rows ?? lock) as Array<{ ok: boolean }>;
     if (!lockRows[0]?.ok) return { ran: false, reason: "Another refresh is in progress." };
 
     const [last] = await tx.select().from(fetchRuns).orderBy(desc(fetchRuns.startedAt)).limit(1);
-    const now = new Date();
+    const now = deps.now?.() ?? new Date();
     // Scheduled runs use a shorter throttle so a dashboard-triggered refresh a few minutes earlier
     // never causes the 15-minute schedule to skip a cycle.
     const minGap = trigger === "schedule" ? SCHEDULED_MIN_GAP_MIN : REFRESH_INTERVAL_MIN;
@@ -124,21 +137,21 @@ export async function runCycle(trigger: "schedule" | "dashboard" | "manual"): Pr
     }
 
     await tx.insert(account).values({ id: 1, startingCapital: START_CAPITAL, cash: START_CAPITAL }).onConflictDoNothing();
-    const [run] = await tx.insert(fetchRuns).values({ trigger, status: "running" }).returning();
+    const [run] = await tx.insert(fetchRuns).values({ trigger, status: "running", startedAt: now }).returning();
     const notes: string[] = [];
 
     let quotes: Quote[] = [];
     let fx: Awaited<ReturnType<typeof fetchFx>> = {};
     try {
-      quotes = await fetchQuotes(key, notes);
-      fx = await fetchFx(key, [...new Set(quotes.map((q) => q.currency))]);
+      quotes = await fetchQuotes(key, notes, fetchImpl);
+      fx = await fetchFx(key, [...new Set(quotes.map((q) => q.currency))], fetchImpl);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       await tx.update(fetchRuns).set({ status: "error", message: msg, notes, finishedAt: new Date() }).where(eq(fetchRuns.id, run.id));
       return { ran: true, runId: run.id, status: "error", notes: [msg, ...notes] };
     }
 
-    return applyMarketData(tx, run.id, quotes, fx, notes, now, SOURCE);
+    return applyMarketData(tx, run.id, quotes, fx, notes, now, deps.source ?? SOURCE);
   });
 }
 
@@ -147,7 +160,9 @@ export async function runCycle(trigger: "schedule" | "dashboard" | "manual"): Pr
 // quotes inside a transaction that is always rolled back.
 export async function applyMarketData(
   tx: any, runId: number, quotes: Quote[], fx: FxRates, notes: string[], now: Date, source: string,
+  opts: { tradingEnabled?: boolean } = {},
 ): Promise<RunResult> {
+  const tradingEnabled = opts.tradingEnabled ?? autoTradingEnabled();
   type Priced = Quote & { snapshotId: number; priceAud: number; fxRate: number; fxTime: Date; fxPair: string };
   const priced: Record<string, Priced> = {};
   for (const q of quotes) {
@@ -170,13 +185,28 @@ export async function applyMarketData(
   const costBasis: Record<string, number> = {};
   for (const p of posRows) { shares[p.symbol] = p.shares; costBasis[p.symbol] = p.costBasisAud; }
 
+  // Duplicate-order guard: a quote that already filled a simulated order (e.g. the provider returns the
+  // same quote on two runs) is never traded again. The database also enforces one order per stock per run.
+  const usedQuote = new Set<string>();
+  const pricedSymbols = Object.keys(priced);
+  if (pricedSymbols.length) {
+    const minQuote = new Date(Math.min(...pricedSymbols.map((k) => priced[k].quoteTime.getTime())));
+    const prior = await tx.select({ symbol: trades.symbol, quoteTime: trades.quoteTime }).from(trades)
+      .where(and(inArray(trades.symbol, pricedSymbols), gte(trades.quoteTime, minQuote)));
+    for (const t of prior) {
+      if (new Date(t.quoteTime).getTime() >= priced[t.symbol].quoteTime.getTime()) usedQuote.add(t.symbol);
+    }
+  }
+
   const tradeable: Record<string, { priceAud: number } | { blocked: string }> = {};
   for (const s of STOCKS) {
     const p = priced[s.symbol];
     if (!p) continue;
     const quoteAge = ageMin(p.quoteTime, now);
     tradeable[s.symbol] =
-      !p.marketOpen ? { blocked: `${s.symbol}: market closed, no simulated trade.` }
+      !tradingEnabled ? { blocked: `${s.symbol}: autonomous paper trading is paused, no simulated trade.` }
+      : usedQuote.has(s.symbol) ? { blocked: `${s.symbol}: quote already used for a simulated order, no duplicate trade.` }
+      : !p.marketOpen ? { blocked: `${s.symbol}: market closed, no simulated trade.` }
       : quoteAge > MAX_TRADE_QUOTE_AGE_MIN ? { blocked: `${s.symbol}: quote is ${Math.round(quoteAge)} min old, no simulated trade.` }
       : p.currency !== "AUD" && ageMin(p.fxTime, now) > MAX_TRADE_FX_AGE_MIN ? { blocked: `${s.symbol}: FX rate is stale, no simulated trade.` }
       : { priceAud: p.priceAud };
