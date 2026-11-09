@@ -143,6 +143,9 @@ footer{
 <div class="card" id="systemStatus">
 <h2>System Status</h2>
 <div class="row"><span>Simulation</span><strong id="simStatus">—</strong></div>
+<div class="row"><span>Autonomous paper trading</span><strong class="right" id="autoStatus">—</strong></div>
+<div class="row"><span>Real-money orders</span><strong class="right green">Disabled · no broker connected</strong></div>
+<div class="row"><span>Environment</span><span class="right" id="envStatus">—</span></div>
 <div class="row"><span>Latest market data</span><span class="right" id="mdTime">—</span></div>
 <div class="row"><span>Last successful update</span><span class="right" id="okRun">—</span></div>
 <div class="row"><span>Scheduled updates</span><span class="right" id="schedRun">—</span></div>
@@ -165,7 +168,16 @@ footer{
 <small>Open positions</small>
 <strong id="openCount">0</strong>
 </div>
+<div class="stat">
+<small>Invested (market value)</small>
+<strong id="invested">—</strong>
 </div>
+<div class="stat">
+<small>Simulated trades</small>
+<strong id="tradeCount">—</strong>
+</div>
+</div>
+<p class="note" id="lastOk" style="margin:12px 0 0">Last successful update: —</p>
 </section>
 
 <section id="allPanel">
@@ -184,7 +196,7 @@ No recorded valuations yet.
 </div>
 
 <div class="card">
-<h2>Trading Activity</h2>
+<h2>Trading Activity <span class="note" style="font-weight:400">(every simulated trade)</span></h2>
 <div id="allHistory" class="history note">
 No trades recorded.
 </div>
@@ -453,6 +465,11 @@ function renderInner(){
  $('cash').textContent=fmt(a.cash);
  $('openCount').textContent=data.offline?'—':
   data.stocks.filter(s=>s.shares>0).length;
+ $('invested').textContent=fmt(a.positionsValue);
+ $('tradeCount').textContent=data.offline?'—':String(data.trades.length);
+ const okr=data.lastSuccessfulRun;
+ $('lastOk').textContent='Last successful update: '+(data.offline?'unknown (disconnected)':
+  okr?when(okr.finishedAt||okr.startedAt):'none yet');
  $('allStocks').innerHTML=data.stocks.map(stockRow).join('');
  $('allHistory').innerHTML=historyRows(data.trades);
  $('haltStatus').textContent=data.offline?'Unknown (disconnected)':
@@ -539,6 +556,15 @@ function renderSystemStatus(){
  else if(!anyOpen){sim='Running · markets closed, no trades until open';simCls='amber';}
  else{sim='Running · trading on fresh verified prices';simCls='green';}
  $('simStatus').textContent=sim;$('simStatus').className=simCls;
+ // Autonomous trading switch
+ if(data.offline)setStatus('autoStatus','Unknown (disconnected)','muted');
+ else if(data.autoTrading===false)setStatus('autoStatus','PAUSED · prices recorded, no simulated orders','amber');
+ else if(a.buysHalted)setStatus('autoStatus','ACTIVE · sells/trims only (buys halted)','red');
+ else setStatus('autoStatus','ACTIVE · automatic simulated buys and sells when markets are open and quotes are fresh','green');
+ const ctx=data.deployContext;
+ setStatus('envStatus',data.offline?'Unknown':ctx==='production'?'Production portfolio':
+  ctx?`Preview (${ctx}) · isolated test database, production untouched`:'Local / unknown',
+  ctx&&ctx!=='production'?'amber':'');
  // Market data
  setStatus('mdTime',md?.latestQuoteTime?
   `Quote ${when(md.latestQuoteTime)} · fetched ${when(md.latestFetchedAt)} · ${md.source} (${md.pricedSymbols}/${data.stocks.length} stocks)`:
