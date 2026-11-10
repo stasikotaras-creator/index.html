@@ -2,6 +2,7 @@
 import { load } from 'cheerio';
 import { financialChecks, secFinancialPeriods } from './financials.js';
 import type { Evidence } from './scoring.js';
+import { createSecClient } from './sec.js';
 export type EdgarInput = {
   currentFilingUrl: string; previousFilingUrl: string;
   currentPublishedAt: string; previousPublishedAt: string;
@@ -11,23 +12,15 @@ export type EdgarInput = {
 };
 export async function collectEdgarEvidence(input: EdgarInput, userAgent: string, now: Date,
   market: { return90dPct: number; sourceUrl: string; publishedAt: string }, fetchImpl: typeof fetch = fetch, financialOverride?: Evidence['financial']): Promise<Evidence> {
-  if (!userAgent.includes('@')) throw new Error('SEC requires an identifying contact User-Agent.');
-  const get = async (source: string) => {
-    const u = new URL(source);
-    if (u.protocol !== 'https:' || !['www.sec.gov', 'data.sec.gov'].includes(u.hostname) || u.username || u.password)
-      throw new Error('Only official SEC HTTPS sources are accepted.');
-    const res = await fetchImpl(u, { headers: { 'User-Agent': userAgent, accept: 'application/json, application/xml, text/xml' },
-      signal: AbortSignal.timeout(8000), redirect: 'error' });
-    if (!res.ok) throw new Error(`SEC HTTP ${res.status}`);
-    return res.text();
-  };
+  const sec = createSecClient(userAgent, fetchImpl);
+  const get = (source: string) => sec.text(source);
   for (const date of [input.currentPublishedAt, input.previousPublishedAt, input.currentPeriod, input.previousPeriod, market.publishedAt])
     if (!Number.isFinite(Date.parse(date)) || Date.parse(date) > now.getTime()) throw new Error('Invalid evidence date.');
   const gap = (Date.parse(input.currentPeriod) - Date.parse(input.previousPeriod)) / 86400000;
   if (gap < 80 || gap > 100 || Date.parse(input.previousPublishedAt) >= Date.parse(input.currentPublishedAt) ||
     Date.parse(input.currentPeriod) > Date.parse(input.currentPublishedAt) || Date.parse(input.previousPeriod) > Date.parse(input.previousPublishedAt))
     throw new Error('Holdings periods and publication dates must be consecutive and ordered.');
-  // Sequential requests keep well below SEC's 10 requests/second fair-access ceiling.
+  // The SEC client serialises requests at ≤5/second, below SEC's 10 requests/second fair-access ceiling.
   const current = await get(input.currentFilingUrl);
   const previous = await get(input.previousFilingUrl);
   const holdings = (xml: string) => {
@@ -63,12 +56,9 @@ export async function collectEdgarEvidence(input: EdgarInput, userAgent: string,
 // Resolve original consecutive 13F filings for a previously verified manager.
 export async function refreshEdgarInput(input: EdgarInput, managerCik: string, userAgent: string,
   fetchImpl: typeof fetch = fetch): Promise<EdgarInput> {
-  if (!/^\d{1,10}$/.test(managerCik) || !userAgent.includes('@')) throw new Error('Verified manager CIK and SEC contact required.');
-  const get = async (url: string) => {
-    const r = await fetchImpl(url, { headers: { 'User-Agent': userAgent }, redirect:'error', signal:AbortSignal.timeout(8000) });
-    if (!r.ok) throw new Error(`SEC discovery HTTP ${r.status}`);
-    return r.json();
-  };
+  if (!/^\d{1,10}$/.test(managerCik)) throw new Error('Verified manager CIK required.');
+  const sec = createSecClient(userAgent, fetchImpl);
+  const get = (url: string) => sec.json(url);
   const data = await get(`https://data.sec.gov/submissions/CIK${managerCik.padStart(10,'0')}.json`);
   if (Number(data.cik) !== Number(managerCik)) throw new Error('Manager identity mismatch.');
   const recent = data.filings?.recent;
@@ -87,9 +77,7 @@ export async function refreshEdgarInput(input: EdgarInput, managerCik: string, u
     const files = (index.directory?.item ?? []).filter((x: any) => /\.xml$/i.test(x.name) && !x.name.includes('/') && !x.name.includes('..'));
     let table: string | undefined;
     for (const file of files) {
-      const r = await fetchImpl(base+file.name, { headers:{'User-Agent':userAgent}, redirect:'error', signal:AbortSignal.timeout(8000) });
-      if (!r.ok) throw new Error(`SEC discovery HTTP ${r.status}`);
-      const body = await r.text();
+      const body = await sec.text(base+file.name);
       if (/<(?:\w+:)?informationTable[\s>]/.test(body)) {
         if (table) throw new Error('Multiple information tables require review.');
         table = base+file.name;

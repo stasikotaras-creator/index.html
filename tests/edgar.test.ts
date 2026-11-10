@@ -16,7 +16,7 @@ const fetcher = (async (url: any) => {
   if (String(url).endsWith('previous.xml')) return new Response(xml(100));
   return Response.json({ cik: 936468, facts: { 'us-gaap': Object.fromEntries(Object.entries({
     Revenues: [fact(120), fact(100, '2024-10-01', '2025-09-30')],
-    InterestExpense: [fact(10)], OperatingIncomeLoss: [fact(50)],
+    InterestExpenseNonoperating: [fact(10)], OperatingIncomeLoss: [fact(50)],
     NetCashProvidedByUsedInOperatingActivities: [fact(30)], PaymentsToAcquirePropertyPlantAndEquipment: [fact(10)],
   }).map(([tag, rows]) => [tag, { units: { USD: rows.length === 1 ? [...rows, fact(rows[0].val, '2024-10-01', '2025-09-30')] : rows } }])) } });
 }) as typeof fetch;
@@ -29,8 +29,8 @@ test('SEC adapter derives holdings and comparable financial checks with source p
   assert.equal(e.provenance!.financialAccession, 'TEST,TEST');
 });
 test('SEC adapter rejects non-SEC sources, missing CUSIP and missing contact', async () => {
-  await assert.rejects(collectEdgarEvidence({ ...input, currentFilingUrl: 'https://example.org/x' }, 'test@example.org', now, market, fetcher));
-  await assert.rejects(collectEdgarEvidence({ ...input, cusip: 'MISSING' }, 'test@example.org', now, market, fetcher));
+  await assert.rejects(collectEdgarEvidence({ ...input, currentFilingUrl: 'https://example.org/x' }, 'TradeGuard test@example.org', now, market, fetcher));
+  await assert.rejects(collectEdgarEvidence({ ...input, cusip: 'MISSING' }, 'TradeGuard test@example.org', now, market, fetcher));
   await assert.rejects(collectEdgarEvidence(input, '', now, market, fetcher));
 });
 
@@ -44,9 +44,9 @@ test('refresh discovers consecutive original manager filings and preserves verif
     if (url.endsWith('index.json')) return Response.json({directory:{item:[{name:'table.xml'}]}});
     return new Response(xml(100));
   }) as typeof fetch;
-  const refreshed = await refreshEdgarInput(input,'123','test@example.org',mock);
+  const refreshed = await refreshEdgarInput(input,'123','TradeGuard test@example.org',mock);
   assert.match(refreshed.currentFilingUrl,/000000012326000002\/table.xml$/);
   assert.equal(refreshed.currentPeriod,'2026-09-30');
   assert.deepEqual(refreshed.performance,input.performance);
-  await assert.rejects(refreshEdgarInput(input,'invalid','test@example.org',mock));
+  await assert.rejects(refreshEdgarInput(input,'invalid','TradeGuard test@example.org',mock));
 });
