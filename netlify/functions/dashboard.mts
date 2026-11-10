@@ -59,6 +59,8 @@ async function buildDashboard(req: Request, deployContext: string | null) {
       costBasisAud: posRows.find((p) => p.symbol === s.symbol)?.costBasisAud ?? 0, price: prices[s.symbol] ?? null })),
     trades: tradeRows,
     equityHistory: history.reverse(),
+    lastTradingEvaluation: runs[0]?.evaluation ?? null,
+    evaluationUnavailableReason: runs[0]?.evaluation ? null : "This refresh has no persisted trading evaluation. Historical HOLD decisions were not recorded; the next completed trading cycle records all five decisions.",
     lastRun: runs[0] ?? null,
     lastSuccessfulRun: okRuns[0] ?? null,
     lastScheduledRun: schedRuns[0] ?? null,

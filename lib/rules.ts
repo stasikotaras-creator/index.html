@@ -29,7 +29,13 @@ export type PlannedOrder = {
   rule: string; cashAfter: number; equityBefore: number; sharesAfter: number; costBasisAfter: number;
 };
 
+export type StockDecision = {
+  symbol: string; decision: "BUY" | "SELL" | "HOLD"; reason: string;
+  buyEligible: boolean; sellConditionReached: boolean;
+};
+
 export type PlanResult = {
+  decisions: StockDecision[];
   orders: PlannedOrder[]; notes: string[]; cash: number; equity: number | null;
   shares: Record<string, number>; costBasis: Record<string, number>; buysHalted: boolean; skipped: boolean;
 };
@@ -40,6 +46,9 @@ export function planOrders(input: PlanInput): PlanResult {
   let cash = input.cash;
   const notes: string[] = [];
   const orders: PlannedOrder[] = [];
+  const decisions: StockDecision[] = input.symbols.map(symbol => ({ symbol, decision: "HOLD",
+    reason: "No order required.", buyEligible: false, sellConditionReached: false }));
+  const decisionOf = (s: string) => decisions.find(d => d.symbol === s)!;
 
   const sharesOf = (s: string) => shares[s] ?? 0;
   const priceOf = (s: string) => {
@@ -57,8 +66,9 @@ export function planOrders(input: PlanInput): PlanResult {
 
   const unpriced = input.symbols.filter((s) => sharesOf(s) > 0 && !(priceOf(s)! > 0));
   if (unpriced.length) {
+    for (const d of decisions) d.reason = `Equity cannot be valued (no price for ${unpriced.join(", ")}); simulated trading skipped.`;
     notes.push(`Equity cannot be valued (no price for ${unpriced.join(", ")}); simulated trading skipped.`);
-    return { orders, notes, cash, equity: null, shares, costBasis: cost, buysHalted: false, skipped: true };
+    return { decisions, orders, notes, cash, equity: null, shares, costBasis: cost, buysHalted: false, skipped: true };
   }
 
   const record = (s: string, side: "BUY" | "SELL", qty: number, rule: string) => {
@@ -75,6 +85,7 @@ export function planOrders(input: PlanInput): PlanResult {
       cash = round(cash + value, 2);
       shares[s] = Math.max(0, round(sharesOf(s) - qty, 6));
     }
+    Object.assign(decisionOf(s), { decision: side, reason: rule, buyEligible: side === "BUY" });
     orders.push({ symbol: s, side, shares: qty, priceAud: price, valueAud: value, rule, cashAfter: cash,
       equityBefore: eqBefore, sharesAfter: shares[s], costBasisAfter: cost[s] });
   };
@@ -83,8 +94,9 @@ export function planOrders(input: PlanInput): PlanResult {
   for (const s of input.symbols) {
     const e = equity();
     if (valueOf(s) <= e * MAX_ALLOCATION + 0.005) continue;
+    decisionOf(s).sellConditionReached = true;
     const why = blocked(s);
-    if (why) { notes.push(`${why} (position above 20% limit)`); continue; }
+    if (why) { decisionOf(s).reason = `${why} (position above 20% limit)`; notes.push(decisionOf(s).reason); continue; }
     const excess = valueOf(s) - e * TARGET_ALLOCATION;
     const qty = Math.min(sharesOf(s), floorShares(excess / tradePrice(s)));
     if (qty > 0) record(s, "SELL", qty, `Trim: position above ${MAX_ALLOCATION * 100}% limit, rebalanced to ${TARGET_ALLOCATION * 100}% target`);
@@ -93,23 +105,33 @@ export function planOrders(input: PlanInput): PlanResult {
   // 2) Buy towards the equal-weight 14% target within the risk limits.
   for (const s of input.symbols) {
     const e = equity();
-    if (input.forceBuyHalt || e <= BUY_HALT_EQUITY) { notes.push(`BUYS HALTED: equity A$${e.toFixed(2)} is at or below A$${BUY_HALT_EQUITY.toFixed(2)}.`); break; }
+    if (input.forceBuyHalt || e <= BUY_HALT_EQUITY) {
+      const reason = input.forceBuyHalt ? "BUYS HALTED: persistent risk halt is active." : `BUYS HALTED: equity A$${e.toFixed(2)} is at or below A$${BUY_HALT_EQUITY.toFixed(2)}.`;
+      if (!notes.includes(reason)) notes.push(reason);
+      if (decisionOf(s).decision !== "SELL" && !decisionOf(s).sellConditionReached) decisionOf(s).reason = reason;
+      continue;
+    }
     const shortfall = e * TARGET_ALLOCATION - valueOf(s);
-    if (shortfall < MIN_TRADE_AUD) continue;
+    if (shortfall < MIN_TRADE_AUD) {
+      if (!decisionOf(s).sellConditionReached) decisionOf(s).reason = `Buy shortfall A$${shortfall.toFixed(2)} is below A$${MIN_TRADE_AUD.toFixed(2)} minimum (14% target); sell requires allocation above 20%.`;
+      continue;
+    }
     const why = blocked(s);
-    if (why) { notes.push(why); continue; }
+    if (why) { decisionOf(s).reason = why; notes.push(why); continue; }
     const capRoom = e * MAX_ALLOCATION - valueOf(s);
     const cashRoom = cash - e * MIN_CASH_RESERVE;
     const budget = Math.min(shortfall, capRoom, cashRoom);
     if (budget < MIN_TRADE_AUD) {
-      notes.push(`${s}: buy blocked by ${cashRoom <= capRoom ? "30% cash reserve" : "20% stock limit"}.`);
+      decisionOf(s).reason = `${s}: buy blocked by ${cashRoom <= capRoom ? "30% cash reserve" : "20% stock limit"}.`;
+      notes.push(decisionOf(s).reason);
       continue;
     }
     // Floor to whole cents below the budget so rounding can never breach the cash reserve or the cap.
     const qty = floorShares((budget - 0.01) / tradePrice(s));
+    if (qty <= 0) decisionOf(s).reason = "Buy quantity rounds to zero at four decimal places.";
     if (qty > 0) record(s, "BUY", qty, `Equal-weight buy towards ${TARGET_ALLOCATION * 100}% target`);
   }
 
   const e = equity();
-  return { orders, notes, cash, equity: e, shares, costBasis: cost, buysHalted: Boolean(input.forceBuyHalt) || e <= BUY_HALT_EQUITY, skipped: false };
+  return { decisions, orders, notes, cash, equity: e, shares, costBasis: cost, buysHalted: Boolean(input.forceBuyHalt) || e <= BUY_HALT_EQUITY, skipped: false };
 }

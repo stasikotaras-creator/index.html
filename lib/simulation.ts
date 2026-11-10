@@ -6,6 +6,7 @@ import {
   account, positions, fetchRuns, priceSnapshots, trades, equitySnapshots, riskState,
 } from "../db/schema.js";
 
+import { describeEvaluation } from "./evaluation.js";
 import { enqueue, tradePayload, randomUUID } from "./notifications.js";
 import {
   planOrders, START_CAPITAL, BUY_HALT_EQUITY, round,
@@ -230,7 +231,7 @@ export async function applyMarketData(
       await tx.update(riskState).set({ halted: true, incidentId }).where(eq(riskState.id, 1));
     } else if (!halted && risk.halted) await tx.update(riskState).set({ halted: false, incidentId: null }).where(eq(riskState.id, 1));
   }
-  const plan = planOrders({
+  const planInput = {
     symbols: STOCKS.map((s) => s.symbol),
     cash: acct.cash,
     shares,
@@ -238,7 +239,10 @@ export async function applyMarketData(
     valuationPrices: Object.fromEntries(STOCKS.map((s) => [s.symbol, latest[s.symbol]?.priceAud])),
     tradeable,
     forceBuyHalt: halted,
-  });
+  };
+  const plan = planOrders(planInput);
+  const evaluation = describeEvaluation(planInput, plan, now,
+    Object.fromEntries(STOCKS.map(s => [s.symbol, latest[s.symbol]?.quoteTime ?? null])));
   notes.push(...plan.notes);
 
   for (const o of plan.orders) {
@@ -266,7 +270,7 @@ export async function applyMarketData(
   const n = Object.keys(priced).length;
   const status = n === STOCKS.length ? "ok" : n ? "partial" : "error";
   await tx.update(fetchRuns).set({
-    status, message: `${n}/${STOCKS.length} verified prices recorded.`, notes, finishedAt: new Date(),
+    status, message: `${n}/${STOCKS.length} verified prices recorded.`, notes, evaluation, finishedAt: new Date(),
   }).where(eq(fetchRuns.id, runId));
   return { ran: true, runId, status, notes };
 }

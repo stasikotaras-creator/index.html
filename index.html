@@ -213,6 +213,14 @@ footer{
 <p class="note" id="lastOk" style="margin:12px 0 0">Last successful update: —</p>
 </section>
 
+<section class="card" aria-labelledby="evaluationTitle">
+<h2 id="evaluationTitle">Last Trading Evaluation</h2>
+<p class="note" id="evaluationTime">Awaiting a recorded evaluation.</p>
+<p class="note">Strategy: 14% equal-weight target · 20% stock limit · 30% cash reserve. The 60/40 investment scoring model is not implemented; institutional data is unavailable and no investment score is calculated.</p>
+<div id="evaluationStocks" aria-live="polite"></div>
+<p class="note" id="evaluationNotes"></p>
+</section>
+
 <section id="allPanel">
 <div class="card">
 <h2>All Stocks</h2>
@@ -555,6 +563,21 @@ function renderInner(){
   r?'Latest refresh completed. All figures come from recorded verified prices and simulated trades.':
   'Waiting for verified prices. No trades are made until real prices are recorded.';
 
+ const evaluation=data.lastTradingEvaluation;
+ $('evaluationTime').textContent=data.offline?'Evaluation unavailable while disconnected.':
+  evaluation?`Evaluated ${when(evaluation.evaluatedAt)} · ${data.lastRun?.trigger||'backend'} · run ${data.lastRun?.id??'—'}`:
+  data.evaluationUnavailableReason||'No persisted evaluation yet.';
+ $('evaluationStocks').innerHTML=data.offline||!evaluation?'':evaluation.stocks.map(d=>`
+  <div style="padding:12px 0;border-bottom:1px solid var(--line)">
+  <div class="row"><strong>${esc(d.symbol)}</strong><strong class="${d.decision==='BUY'?'green':d.decision==='SELL'?'red':'muted'}">${esc(d.decision)}</strong></div>
+  <p class="note" style="margin:5px 0">${esc(d.reason)}</p>
+  <div class="note">Position at evaluation: ${esc(d.shares)} shares · Allocation: ${d.allocation===null?'unavailable':(d.allocation*100).toFixed(2)+'%'}<br>
+  Latest verified quote: ${d.quoteTime?esc(when(d.quoteTime)):'unavailable'}<br>
+  Purchase eligible: ${d.buyEligible?'yes':'no'} · Sell condition reached: ${d.sellConditionReached?'yes':'no'}</div>
+  </div>`).join('');
+ $('evaluationNotes').textContent=data.offline?'':data.lastRun?.status==='error'?
+  `Latest cycle failed: ${data.lastRun.message||'unknown error'}. No completed evaluation is available for this cycle.`:
+  (data.lastRun?.notes||[]).join(' ');
  renderSystemStatus();
 
  if(active!=='ALL'){
