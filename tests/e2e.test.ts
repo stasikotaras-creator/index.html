@@ -336,3 +336,25 @@ test('safety: missing investor evidence cannot block -8% stops; stale unrelated 
   assert.equal(run.evaluation!.stocks.length, 5);
   assert.equal(run.evaluation!.stocks.find(d => d.symbol === 'LMT')!.score!.complete, false);
 });
+
+test('safety: all five independent stops persist full exits without evidence or same-cycle repurchases', async () => {
+  const db = await freshDb();
+  await db.delete(schema.investmentEvidence);
+  await db.insert(account).values({ id: 1, cash: 10000, startingCapital: 15000 });
+  await db.insert(positions).values(STOCKS.map(s => ({ symbol: s.symbol, shares: 1,
+    costBasisAud: BASE_USD[s.providerSymbol] * FX / .9 })));
+  const now = new Date('2026-11-10T15:00:00Z');
+  const provider = stubProvider(() => ({ quoteTime: now }));
+  const result = await runCycle('test', deps(db, provider.fetchImpl, now));
+  const fills = await db.select().from(trades);
+  assert.equal(fills.length, 5);
+  assert.deepEqual(new Set(fills.map(t => t.symbol)), new Set(STOCKS.map(s => s.symbol)));
+  assert.ok(fills.every(t => t.side === 'SELL' && t.shares === 1 && /Risk stop/.test(t.rule)));
+  assert.ok((await db.select().from(positions)).every(p => p.shares === 0 && p.costBasisAud === 0));
+  const [acct] = await db.select().from(account);
+  assert.equal(acct.cash, 10000 + Object.values(BASE_USD).reduce((n, p) => n + p * FX, 0));
+  const [run] = await db.select().from(fetchRuns).where(eq(fetchRuns.id, result.runId!));
+  assert.ok(run.evaluation!.stocks.every(s => s.decision === 'SELL' && !s.score!.complete));
+  await runCycle('test', deps(db, provider.fetchImpl, new Date(+now + min(15))));
+  assert.equal((await db.select().from(trades)).length, 5);
+});
