@@ -120,6 +120,22 @@ footer{
 .alert button{margin-top:8px;padding:7px 11px}
 .right{text-align:right;max-width:65%}
 .amber{color:var(--gold)}
+/* Exchange clock */
+.market-clock{margin:8px 0 15px;padding:16px 18px;border:1px solid #68583c;border-radius:14px;background:linear-gradient(115deg,#202a34,#151f2c);box-shadow:inset 3px 0 var(--gold)}
+.market-top,.market-bottom{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.market-title{font-size:11px;letter-spacing:.12em;color:var(--gold);font-weight:700}
+.market-state{font-size:10px;letter-spacing:.08em;font-weight:750;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:5px 9px}
+.market-state[data-state="OPEN"]{color:var(--green);border-color:#366c59}
+.market-state[data-state="HOLIDAY"]{color:var(--gold);border-color:#68583c}
+.market-body{display:grid;grid-template-columns:1fr 1.3fr;gap:20px;align-items:center;margin:15px 0}
+.market-countdown{display:block;font-size:32px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:.035em;color:var(--gold);line-height:1.3}
+.market-label{font-size:11px;color:var(--muted)}
+.market-times{border-left:1px solid var(--line);padding-left:18px;font-size:12px;display:grid;gap:9px}
+.market-times div{display:grid;grid-template-columns:40px 1fr;gap:8px}
+.market-times time{font-variant-numeric:tabular-nums}
+.market-bottom{border-top:1px solid var(--line);padding-top:10px;font-size:10px;color:var(--muted);align-items:start}
+.market-bottom a{color:var(--gold);white-space:nowrap;text-underline-offset:3px}
+@media(max-width:480px){.market-body{grid-template-columns:1fr;gap:12px}.market-times{border-left:0;padding:12px 0 0;border-top:1px solid var(--line)}.market-bottom{flex-wrap:wrap}.market-countdown{font-size:30px}}
 </style>
 </head>
 <body>
@@ -129,6 +145,15 @@ footer{
 <h1>REVEL / TRADEGUARD</h1>
 <span class="badge">PAPER TRADING</span>
 </header>
+<section class="market-clock" aria-label="US stock market clock">
+<div class="market-top"><span class="market-title">NYSE / NASDAQ <span style="opacity:.65">· EQUITIES</span></span><span class="market-state" id="marketState" role="status">CONNECTING</span></div>
+<div class="market-body">
+<div><span class="market-label" id="marketEvent">Checking exchange calendar</span><strong class="market-countdown" id="marketCountdown" aria-live="off">—</strong></div>
+<div class="market-times"><div><span class="market-label">Opens</span><time id="marketOpen">—</time></div><div><span class="market-label">Closes</span><time id="marketClose">—</time></div></div>
+</div>
+<div class="market-bottom"><span id="marketDetail">Regular trading hours · Brisbane time</span><a href="https://www.nyse.com/markets/hours-calendars" target="_blank" rel="noopener noreferrer">Official calendar ↗</a></div>
+</section>
+<script type="module" src="/assets/market-clock.js"></script>
 <div class="status">
 <span id="feedStatus">Connecting…</span>
 <span id="updated"></span>
