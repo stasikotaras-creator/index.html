@@ -91,3 +91,26 @@ export const equitySnapshots = pgTable("equity_snapshots", {
   index("equity_snapshots_recorded_idx").on(t.recordedAt),
   uniqueIndex("equity_snapshots_run_uq").on(t.runId),
 ]);
+
+// Server-only VAPID material; never returned by dashboard/history queries.
+export const pushConfig = pgTable("push_config", {
+  id: integer().primaryKey(), publicKey: text("public_key").notNull(), privateKey: text("private_key").notNull(),
+});
+export const pushSubscriptions = pgTable("push_subscriptions", {
+  id: text().primaryKey(), ownerId: text("owner_id").notNull(), endpoint: text().notNull().unique(),
+  subscription: jsonb().notNull(), createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+export const notificationOutbox = pgTable("notification_outbox", {
+  id: text().primaryKey(), kind: text().notNull(), payload: jsonb().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+export const notificationDeliveries = pgTable("notification_deliveries", {
+  eventId: text("event_id").notNull().references(() => notificationOutbox.id),
+  subscriptionId: text("subscription_id").notNull().references(() => pushSubscriptions.id, { onDelete: "cascade" }),
+  attempts: integer().notNull().default(0), status: text().notNull().default("pending"),
+  nextAttempt: timestamp("next_attempt", { withTimezone: true }).defaultNow().notNull(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+}, t => [uniqueIndex("notification_delivery_uq").on(t.eventId, t.subscriptionId)]);
+export const riskState = pgTable("risk_state", {
+  id: integer().primaryKey(), incidentId: text("incident_id"), halted: boolean().notNull().default(false),
+});

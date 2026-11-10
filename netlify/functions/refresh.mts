@@ -1,3 +1,4 @@
+import { drain } from "../../lib/notifications.js";
 import type { Config } from "@netlify/functions";
 import { runCycle } from "../../lib/simulation.js";
 
@@ -5,7 +6,9 @@ import { runCycle } from "../../lib/simulation.js";
 // so it never calls the provider more often than the scheduled interval).
 export default async () => {
   try {
-    return Response.json(await runCycle("dashboard"), { headers: { "cache-control": "no-store" } });
+    const result = await runCycle("dashboard");
+    await drain();
+    return Response.json(result, { headers: { "cache-control": "no-store" } });
   } catch (err) {
     console.error("refresh failed", err);
     return Response.json({ ran: false, reason: "Refresh failed." }, { status: 500 });

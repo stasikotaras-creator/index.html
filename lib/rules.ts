@@ -13,6 +13,7 @@ export const round = (n: number, dp = 2) => Math.round(n * 10 ** dp) / 10 ** dp;
 const floorShares = (n: number) => Math.floor(n * 10000) / 10000;
 
 export type PlanInput = {
+  forceBuyHalt?: boolean;
   symbols: readonly string[];
   cash: number;
   shares: Record<string, number>;
@@ -92,7 +93,7 @@ export function planOrders(input: PlanInput): PlanResult {
   // 2) Buy towards the equal-weight 14% target within the risk limits.
   for (const s of input.symbols) {
     const e = equity();
-    if (e <= BUY_HALT_EQUITY) { notes.push(`BUYS HALTED: equity A$${e.toFixed(2)} is at or below A$${BUY_HALT_EQUITY.toFixed(2)}.`); break; }
+    if (input.forceBuyHalt || e <= BUY_HALT_EQUITY) { notes.push(`BUYS HALTED: equity A$${e.toFixed(2)} is at or below A$${BUY_HALT_EQUITY.toFixed(2)}.`); break; }
     const shortfall = e * TARGET_ALLOCATION - valueOf(s);
     if (shortfall < MIN_TRADE_AUD) continue;
     const why = blocked(s);
@@ -110,5 +111,5 @@ export function planOrders(input: PlanInput): PlanResult {
   }
 
   const e = equity();
-  return { orders, notes, cash, equity: e, shares, costBasis: cost, buysHalted: e <= BUY_HALT_EQUITY, skipped: false };
+  return { orders, notes, cash, equity: e, shares, costBasis: cost, buysHalted: Boolean(input.forceBuyHalt) || e <= BUY_HALT_EQUITY, skipped: false };
 }
