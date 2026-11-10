@@ -1,5 +1,6 @@
 // SEC evidence adapter. No inference of manager success from 13F holdings.
 import { load } from 'cheerio';
+import { financialChecks, secFinancialPeriods } from './financials.js';
 import type { Evidence } from './scoring.js';
 export type EdgarInput = {
   currentFilingUrl: string; previousFilingUrl: string;
@@ -9,7 +10,7 @@ export type EdgarInput = {
   performance: Evidence['institutional'];
 };
 export async function collectEdgarEvidence(input: EdgarInput, userAgent: string, now: Date,
-  market: { return90dPct: number; sourceUrl: string; publishedAt: string }, fetchImpl: typeof fetch = fetch): Promise<Evidence> {
+  market: { return90dPct: number; sourceUrl: string; publishedAt: string }, fetchImpl: typeof fetch = fetch, financialOverride?: Evidence['financial']): Promise<Evidence> {
   if (!userAgent.includes('@')) throw new Error('SEC requires an identifying contact User-Agent.');
   const get = async (source: string) => {
     const u = new URL(source);
@@ -47,40 +48,56 @@ export async function collectEdgarEvidence(input: EdgarInput, userAgent: string,
   if (!(b > 0)) throw new Error('No positive prior holding for percentage comparison.');
   if (!/^\d{1,10}$/.test(input.companyCik)) throw new Error('Invalid company CIK.');
   const factsUrl = `https://data.sec.gov/api/xbrl/companyfacts/CIK${input.companyCik.padStart(10, '0')}.json`;
-  const facts = JSON.parse(await get(factsUrl));
-  if (Number(facts.cik) !== Number(input.companyCik)) throw new Error('Company identity mismatch.');
-  const gaap = facts.facts?.['us-gaap'];
-  type Fact = { start: string; end: string; filed: string; val: number; accn: string; form: string };
-  const annual = (tags: string[]): Fact[] => {
-    for (const tag of tags) {
-      const rows = (gaap?.[tag]?.units?.USD ?? []).filter((r: Fact) =>
-        ['10-K', '10-K/A'].includes(r.form) && Number.isFinite(r.val) && Date.parse(r.filed) <= now.getTime() &&
-        (Date.parse(r.end) - Date.parse(r.start)) / 86400000 >= 350 &&
-        (Date.parse(r.end) - Date.parse(r.start)) / 86400000 <= 380);
-      if (rows.length) return rows.sort((a: Fact, b: Fact) => b.end.localeCompare(a.end) || b.filed.localeCompare(a.filed));
-    }
-    throw new Error('Required comparable US GAAP annual facts unavailable.');
-  };
-  const revenues = annual(['RevenueFromContractWithCustomerExcludingAssessedTax', 'Revenues', 'SalesRevenueNet']);
-  const r = revenues[0], prior = revenues.find(x => x.end < r.start);
-  if (!prior || !(prior.val > 0)) throw new Error('Comparable prior annual revenue missing.');
-  const same = (tags: string[]) => {
-    const row = annual(tags).find(x => x.start === r.start && x.end === r.end && x.accn === r.accn);
-    if (!row) throw new Error('Financial facts do not share reporting period and accession.');
-    return row.val;
-  };
-  const interest = same(['InterestExpenseNonOperating', 'InterestExpense']);
-  if (!(interest > 0)) throw new Error('Positive disclosed interest expense required.');
-  const cash = same(['NetCashProvidedByUsedInOperatingActivities']);
-  const capex = same(['PaymentsToAcquirePropertyPlantAndEquipment']);
-  const operating = same(['OperatingIncomeLoss']);
-  if (now.getTime() - Date.parse(r.filed) > 120 * 86400000) throw new Error('Financial filing exceeds 120-day policy; purchase remains blocked.');
+  const facts = financialOverride ? null : JSON.parse(await get(factsUrl));
+  if (!financialOverride && Number(facts.cik) !== Number(input.companyCik)) throw new Error('Company identity mismatch.');
+  const financial = financialOverride ?? { ...financialChecks(secFinancialPeriods(facts), now), sourceUrl: factsUrl, return90dPct: market.return90dPct };
   return {
     sourceUrl: input.currentFilingUrl, publishedAt: input.currentPublishedAt, capturedAt: now.toISOString(),
-    expiresAt: new Date(Math.min(now.getTime() + 86400000, Date.parse(r.filed) + 120 * 86400000)).toISOString(),
+    expiresAt: new Date(Math.min(now.getTime() + 86400000, Date.parse(financial.publishedAt) + 120 * 86400000)).toISOString(),
     institutional: { ...input.performance, holdingChangePct: (a - b) / b * 100 },
-    financial: { sourceUrl: factsUrl, publishedAt: r.filed, revenueGrowthPct: (r.val / prior.val - 1) * 100,
-      freeCashFlowPositive: cash - capex > 0, interestCoverage: operating / interest, return90dPct: market.return90dPct },
-    provenance: { input, financialAccession: r.accn, financialPeriod: r.end, market },
+    financial: { ...financial, return90dPct: market.return90dPct },
+    provenance: { input, financialAccession: financial.accessions?.join(',') ?? financial.sourceUrl, financialPeriod: financial.period ?? financial.publishedAt, market },
   };
+}
+
+// Resolve original consecutive 13F filings for a previously verified manager.
+export async function refreshEdgarInput(input: EdgarInput, managerCik: string, userAgent: string,
+  fetchImpl: typeof fetch = fetch): Promise<EdgarInput> {
+  if (!/^\d{1,10}$/.test(managerCik) || !userAgent.includes('@')) throw new Error('Verified manager CIK and SEC contact required.');
+  const get = async (url: string) => {
+    const r = await fetchImpl(url, { headers: { 'User-Agent': userAgent }, redirect:'error', signal:AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(`SEC discovery HTTP ${r.status}`);
+    return r.json();
+  };
+  const data = await get(`https://data.sec.gov/submissions/CIK${managerCik.padStart(10,'0')}.json`);
+  if (Number(data.cik) !== Number(managerCik)) throw new Error('Manager identity mismatch.');
+  const recent = data.filings?.recent;
+  const rows = (recent?.form ?? []).flatMap((form: string,i: number) => form === '13F-HR' ? [{
+    accession:recent.accessionNumber[i], period:recent.reportDate[i], published:recent.filingDate[i] }] : [])
+    .sort((a: any,b: any) => b.period.localeCompare(a.period) || b.published.localeCompare(a.published));
+  const filings = rows.filter((r: any,i: number) => rows.findIndex((x: any) => x.period === r.period) === i).slice(0,2);
+  if (filings.length !== 2) throw new Error('Two original 13F filings unavailable.');
+  if ((recent.form as string[]).some((form,i) => form === '13F-HR/A' && filings.some((f: any) => f.period === recent.reportDate[i])))
+    throw new Error('Amended 13F period requires source review before refresh.');
+  const urls: string[] = [];
+  for (const filing of filings) {
+    if (!/^\d{10}-\d{2}-\d{6}$/.test(filing.accession)) throw new Error('Invalid SEC accession.');
+    const base = `https://www.sec.gov/Archives/edgar/data/${Number(managerCik)}/${filing.accession.replaceAll('-','')}/`;
+    const index = await get(base+'index.json');
+    const files = (index.directory?.item ?? []).filter((x: any) => /\.xml$/i.test(x.name) && !x.name.includes('/') && !x.name.includes('..'));
+    let table: string | undefined;
+    for (const file of files) {
+      const r = await fetchImpl(base+file.name, { headers:{'User-Agent':userAgent}, redirect:'error', signal:AbortSignal.timeout(8000) });
+      if (!r.ok) throw new Error(`SEC discovery HTTP ${r.status}`);
+      const body = await r.text();
+      if (/<(?:\w+:)?informationTable[\s>]/.test(body)) {
+        if (table) throw new Error('Multiple information tables require review.');
+        table = base+file.name;
+      }
+    }
+    if (!table) throw new Error('13F information table unavailable.');
+    urls.push(table);
+  }
+  return { ...input, currentFilingUrl:urls[0], previousFilingUrl:urls[1], currentPeriod:filings[0].period,
+    previousPeriod:filings[1].period, currentPublishedAt:filings[0].published, previousPublishedAt:filings[1].published };
 }

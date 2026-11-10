@@ -215,6 +215,7 @@ footer{
 
 <section class="card" aria-labelledby="evaluationTitle">
 <h2 id="evaluationTitle">Last Trading Evaluation</h2>
+<p class="note"><a href="/verification/">Investor verification report: Fidelity, TCI and specialist defence funds</a></p>
 <p class="note" id="evaluationTime">Awaiting a recorded evaluation.</p>
 <p class="note">Strategy: 60% documented successful-investor behaviour + 40% independent analysis. Missing verified evidence means an incomplete score and no strategy trade. Sizing: 14% target · 20% stock limit · 30% cash reserve.</p>
 <div id="evaluationStocks" aria-live="polite"></div>
@@ -574,6 +575,13 @@ function renderInner(){
   <div class="note">Position at evaluation: ${esc(d.shares)} shares · Allocation: ${d.allocation===null?'unavailable':(d.allocation*100).toFixed(2)+'%'}<br>
   Latest verified quote: ${d.quoteTime?esc(when(d.quoteTime)):'unavailable'}<br>
   Score: ${d.score?.complete?esc(d.score.total)+'/100':'incomplete'} · ${esc(d.score?.reason||'No recorded score')}<br>
+  Institutional (60%): ${d.score?.institutional??'unavailable'}/100 · Independent (40%): ${d.score?.independent??'unavailable'}/100<br>
+  Institutional source: ${esc(d.score?.evidence?.sourceUrl||'unavailable')} · Published: ${esc(d.score?.evidence?.publishedAt||'unavailable')}<br>
+  Financial source: ${esc(d.score?.evidence?.financial?.sourceUrl||'unavailable')} · Published: ${esc(d.score?.evidence?.financial?.publishedAt||'unavailable')} · Basis: ${esc(d.score?.evidence?.financial?.basis||'unspecified')}<br>
+  Investor performance: ${esc(d.score?.evidence?.institutional?.performanceSourceUrl||'unavailable')} · Published: ${esc(d.score?.evidence?.institutional?.performancePublishedAt||'unavailable')}<br>
+  Market source: ${esc(d.score?.evidence?.provenance?.market?.sourceUrl||'unavailable')} · Published: ${esc(d.score?.evidence?.provenance?.market?.publishedAt||'unavailable')}<br>
+  Previous holdings source: ${esc(d.score?.evidence?.provenance?.input?.previousFilingUrl||'unavailable')} · Periods: ${esc(d.score?.evidence?.provenance?.input?.previousPeriod||'unavailable')} → ${esc(d.score?.evidence?.provenance?.input?.currentPeriod||'unavailable')}<br>
+  Captured: ${esc(d.score?.evidence?.capturedAt||'unavailable')} · Expires: ${esc(d.score?.evidence?.expiresAt||'unavailable')}<br>
   Profit target (AUD/share): ${d.profitTargetAud?fmt(d.profitTargetAud):'no position'} · Stop: ${d.stopLossAud?fmt(d.stopLossAud):'no position'}<br>
   Exit: ${esc(d.exitConditions||'See recorded strategy')}<br>
   Next trade: ${esc(d.nextTradeConditions||'See recorded strategy')}<br>

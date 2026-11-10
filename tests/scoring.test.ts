@@ -44,3 +44,28 @@ test('profit exits require evidence; stops remain independent and never repurcha
     assert.equal(plan.orders[0].side, 'SELL');
   }
 });
+
+test('all five protective stops exit independently of an investor failing its sector benchmark', () => {
+  // Synthetic positions and prices; the performance comparison follows the verification finding.
+  const symbols = ['LMT', 'RTX', 'GD', 'NOC', 'BAE'];
+  const rejected = structuredClone(evidence);
+  rejected.institutional.annualReturn = 15.70;
+  rejected.institutional.benchmarkReturn = 17.11;
+  const score = scoreEvidence(rejected, now);
+  assert.equal(score.complete, false);
+  const input = { symbols, cash: 4000,
+    shares: Object.fromEntries(symbols.map(s => [s, 1])),
+    costBasis: Object.fromEntries(symbols.map(s => [s, 100])),
+    valuationPrices: Object.fromEntries(symbols.map(s => [s, 92])),
+    tradeable: Object.fromEntries(symbols.map(s => [s, { priceAud: 92 }])),
+    scores: Object.fromEntries(symbols.map(s => [s, score])) };
+  const plan = planOrders(input);
+  assert.equal(plan.orders.length, 5);
+  assert.ok(plan.orders.every(o => o.side === 'SELL' && /Risk stop/.test(o.rule)));
+  assert.ok(symbols.every(s => plan.shares[s] === 0));
+  assert.equal(plan.cash, 4460);
+  const recovered = planOrders({ ...input, valuationPrices: Object.fromEntries(symbols.map(s => [s, 100])),
+    tradeable: Object.fromEntries(symbols.map(s => [s, { priceAud: 100 }])) });
+  assert.equal(recovered.orders.length, 0);
+  assert.ok(recovered.decisions.every(d => d.decision === 'HOLD' && !d.buyEligible));
+});

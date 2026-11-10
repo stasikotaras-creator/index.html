@@ -1,5 +1,7 @@
 # Professional-investor candidates for review
 
+Current verification continuation: [Fidelity, TCI and specialist defence-fund verification](investor-verification.md) records the newer research priority, verified exposures and current ineligibility findings.
+
 Prepared 10 November 2026. These are research candidates, not approved evidence records or trading signals. No performance numbers, manager qualifications or current holdings have been inferred. No database records were imported. Selecting a candidate does not authorise deployment or a simulated purchase.
 
 ## Shortlist

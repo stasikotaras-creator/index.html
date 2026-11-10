@@ -4,7 +4,7 @@ export type Evidence = {
   publishedAt: string; capturedAt: string; expiresAt: string; sourceUrl: string;
   institutional: { investor: string; performanceSourceUrl: string; performancePublishedAt: string;
     years: number; annualReturn: number; benchmarkReturn: number; holdingChangePct: number };
-  financial: { sourceUrl: string; publishedAt: string; revenueGrowthPct: number;
+  financial: { basis?: string; period?: string; accessions?: string[]; sourceUrl: string; publishedAt: string; revenueGrowthPct: number;
     freeCashFlowPositive: boolean; interestCoverage: number; return90dPct: number };
 };
 export type Score = { complete: boolean; institutional: number | null; independent: number | null;
