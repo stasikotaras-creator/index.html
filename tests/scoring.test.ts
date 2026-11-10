@@ -34,11 +34,11 @@ test('incomplete model preserves holdings and cash instead of falling back to eq
   assert.deepEqual(plan.costBasis, input.costBasis);
   assert.ok(plan.decisions.every(d => d.decision === 'HOLD' && d.reason.includes('Incomplete')));
 });
-test('profit and stop exits require complete evidence, never repurchase in the same cycle', () => {
+test('profit exits require evidence; stops remain independent and never repurchase in the same cycle', () => {
   for (const price of [920, 736]) {
     const input = { symbols: ['LMT'], cash: 4000, shares: { LMT: 1 }, costBasis: { LMT: 800 },
       valuationPrices: { LMT: price }, tradeable: { LMT: { priceAud: price } } };
-    assert.equal(planOrders(input).orders.length, 0);
+    assert.equal(planOrders(input).orders.length, price <= 736 ? 1 : 0);
     const plan = planOrders({ ...input, scores: testScores });
     assert.equal(plan.orders.length, 1);
     assert.equal(plan.orders[0].side, 'SELL');
