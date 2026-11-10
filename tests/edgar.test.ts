@@ -18,7 +18,7 @@ const fetcher = (async (url: any) => {
     Revenues: [fact(120), fact(100, '2024-10-01', '2025-09-30')],
     InterestExpense: [fact(10)], OperatingIncomeLoss: [fact(50)],
     NetCashProvidedByUsedInOperatingActivities: [fact(30)], PaymentsToAcquirePropertyPlantAndEquipment: [fact(10)],
-  }).map(([tag, rows]) => [tag, { units: { USD: rows } }])) } });
+  }).map(([tag, rows]) => [tag, { units: { USD: rows.length === 1 ? [...rows, fact(rows[0].val, '2024-10-01', '2025-09-30')] : rows } }])) } });
 }) as typeof fetch;
 test('SEC adapter derives holdings and comparable financial checks with source provenance', async () => {
   const e = await collectEdgarEvidence(input, 'TradeGuard test@example.org', now, market, fetcher);
@@ -26,10 +26,27 @@ test('SEC adapter derives holdings and comparable financial checks with source p
   assert.ok(Math.abs(e.financial.revenueGrowthPct - 20) < 1e-9);
   assert.equal(e.financial.interestCoverage, 5);
   assert.equal(e.financial.freeCashFlowPositive, true);
-  assert.equal(e.provenance!.financialAccession, 'TEST');
+  assert.equal(e.provenance!.financialAccession, 'TEST,TEST');
 });
 test('SEC adapter rejects non-SEC sources, missing CUSIP and missing contact', async () => {
   await assert.rejects(collectEdgarEvidence({ ...input, currentFilingUrl: 'https://example.org/x' }, 'test@example.org', now, market, fetcher));
   await assert.rejects(collectEdgarEvidence({ ...input, cusip: 'MISSING' }, 'test@example.org', now, market, fetcher));
   await assert.rejects(collectEdgarEvidence(input, '', now, market, fetcher));
+});
+
+test('refresh discovers consecutive original manager filings and preserves verified qualification', async () => {
+  const { refreshEdgarInput } = await import('../lib/edgar.js');
+  const mock = (async (u: any) => {
+    const url = String(u);
+    if (url.includes('submissions')) return Response.json({cik:123,filings:{recent:{
+      form:['13F-HR','13F-HR'], accessionNumber:['0000000123-26-000002','0000000123-26-000001'],
+      reportDate:['2026-09-30','2026-06-30'],filingDate:['2026-11-01','2026-08-01'] }}});
+    if (url.endsWith('index.json')) return Response.json({directory:{item:[{name:'table.xml'}]}});
+    return new Response(xml(100));
+  }) as typeof fetch;
+  const refreshed = await refreshEdgarInput(input,'123','test@example.org',mock);
+  assert.match(refreshed.currentFilingUrl,/000000012326000002\/table.xml$/);
+  assert.equal(refreshed.currentPeriod,'2026-09-30');
+  assert.deepEqual(refreshed.performance,input.performance);
+  await assert.rejects(refreshEdgarInput(input,'invalid','test@example.org',mock));
 });

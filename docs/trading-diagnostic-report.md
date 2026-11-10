@@ -1,5 +1,7 @@
 # TradeGuard diagnostic report — 10 November 2026
 
+Current verification continuation: [Fidelity, TCI and specialist defence-fund verification](investor-verification.md) records the newer research priority, verified exposures and current ineligibility findings.
+
 ## Safety correction
 
 The -8% remaining-average-cost stop previously required a complete institutional score. It now operates independently of institutional/financial evidence. Score exits and +15% profit exits still require complete evidence. A valid stop exits the entire remaining position and cannot repurchase in the same cycle.

@@ -2,18 +2,20 @@
 // Manifest requires source verification: manager identity, consecutive original (not amended)
 // 13F periods, filing dates, CUSIP/security identity and comparable manager/benchmark returns.
 import { readFile } from 'node:fs/promises';
-import { collectEdgarEvidence, type EdgarInput } from '../lib/edgar.js';
+import { collectEdgarEvidence, type EdgarInput, refreshEdgarInput } from '../lib/edgar.js';
+import { collectBaeFinancials, type BaeReport } from '../lib/bae.js';
 import { scoreEvidence } from '../lib/scoring.js';
 import { db } from '../db/index.js';
 import { investmentEvidence } from '../db/schema.js';
 const [file, attestation] = process.argv.slice(2);
 if (!file || attestation !== '--sources-verified') throw new Error('Usage: tsx scripts/collect-edgar-evidence.ts manifest.json --sources-verified');
-const manifest: { symbol: string; edgar: EdgarInput } = JSON.parse(await readFile(file, 'utf8'));
+const manifest: { symbol: string; edgar: EdgarInput; managerCik: string; baeReports?: BaeReport[]; adrOrdinaryRatio?: number } = JSON.parse(await readFile(file, 'utf8'));
 const mapping: Record<string, { cik: string; ticker: string }> = {
   LMT: { cik: '936468', ticker: 'LMT' }, RTX: { cik: '101829', ticker: 'RTX' },
   GD: { cik: '40533', ticker: 'GD' }, NOC: { cik: '1133421', ticker: 'NOC' },
 };
-const company = mapping[manifest.symbol];
+const company = manifest.symbol === 'BAE' ? { cik: manifest.edgar.companyCik, ticker:'BAESY' } : mapping[manifest.symbol];
+if (manifest.symbol === 'BAE' && (manifest.adrOrdinaryRatio !== 4 || !manifest.baeReports?.length)) throw new Error('Verified BAE reports and 4:1 ordinary-share ADR ratio required.');
 if (!company || Number(company.cik) !== Number(manifest.edgar.companyCik))
   throw new Error('Unsupported company or mismatched CIK. BAE requires a separately verified IFRS/ADR adapter.');
 const env = (name: string) => (globalThis as any).Netlify?.env?.get(name) ?? process.env[name];
@@ -32,10 +34,12 @@ const latest = values[0];
 const baseline = values.find((r: any) => latest && Date.parse(r.datetime) <= Date.parse(latest.datetime) - 90 * 86400000);
 if (!latest || !baseline || now.getTime() - Date.parse(latest.datetime) > 5 * 86400000 ||
   ![latest, baseline].every(r => Number.isFinite(Number(r.close)) && Number(r.close) > 0)) throw new Error('Incomplete or stale 90-day market history.');
-const evidence = await collectEdgarEvidence(manifest.edgar, agent, now, {
+const refreshed = await refreshEdgarInput(manifest.edgar, manifest.managerCik, agent);
+const bae = manifest.symbol === 'BAE' ? await collectBaeFinancials(manifest.baeReports!, now) : undefined;
+const evidence = await collectEdgarEvidence(refreshed, agent, now, {
   return90dPct: (Number(latest.close) / Number(baseline.close) - 1) * 100,
   sourceUrl: `https://api.twelvedata.com/time_series?symbol=${company.ticker}&interval=1day`, publishedAt: latest.datetime,
-});
+}, fetch, bae ? { ...bae, return90dPct: (Number(latest.close) / Number(baseline.close) - 1) * 100 } : undefined);
 const score = scoreEvidence(evidence, now);
 if (!score.complete) throw new Error(score.reason);
 await db.insert(investmentEvidence).values({ symbol: manifest.symbol, evidence, recordedAt: now });
