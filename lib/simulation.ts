@@ -3,9 +3,10 @@
 import { sql, eq, desc, and, gte, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
-  account, positions, fetchRuns, priceSnapshots, trades, equitySnapshots,
+  account, positions, fetchRuns, priceSnapshots, trades, equitySnapshots, riskState,
 } from "../db/schema.js";
 
+import { enqueue, tradePayload, randomUUID } from "./notifications.js";
 import {
   planOrders, START_CAPITAL, BUY_HALT_EQUITY, round,
 } from "./rules.js";
@@ -212,6 +213,23 @@ export async function applyMarketData(
       : { priceAud: p.priceAud };
   }
 
+  await tx.insert(riskState).values({ id: 1 }).onConflictDoNothing();
+  const [risk] = await tx.select().from(riskState).where(eq(riskState.id, 1));
+  // Only current, complete, fresh provider valuations can create or clear an incident.
+  const verified = STOCKS.every(s => priced[s.symbol] &&
+    ageMin(priced[s.symbol].quoteTime, now) >= -1 &&
+    ageMin(priced[s.symbol].quoteTime, now) <= MAX_TRADE_QUOTE_AGE_MIN &&
+    ageMin(priced[s.symbol].fxTime, now) >= -1 && ageMin(priced[s.symbol].fxTime, now) <= MAX_TRADE_FX_AGE_MIN);
+  const verifiedEquity = acct.cash + STOCKS.reduce((v, s) => v + (shares[s.symbol] ?? 0) * (priced[s.symbol]?.priceAud ?? 0), 0);
+  let halted = risk.halted;
+  if (verified) {
+    halted = verifiedEquity <= BUY_HALT_EQUITY;
+    if (halted && !risk.halted) {
+      const incidentId = randomUUID();
+      await enqueue(tx, `risk:${incidentId}`, 'risk', { title: 'URGENT · Simulated purchases halted', body: `Verified equity A$${verifiedEquity.toFixed(2)} is at or below A$2,500. New simulated BUY orders are halted. ${now.toISOString()}` });
+      await tx.update(riskState).set({ halted: true, incidentId }).where(eq(riskState.id, 1));
+    } else if (!halted && risk.halted) await tx.update(riskState).set({ halted: false, incidentId: null }).where(eq(riskState.id, 1));
+  }
   const plan = planOrders({
     symbols: STOCKS.map((s) => s.symbol),
     cash: acct.cash,
@@ -219,16 +237,18 @@ export async function applyMarketData(
     costBasis,
     valuationPrices: Object.fromEntries(STOCKS.map((s) => [s.symbol, latest[s.symbol]?.priceAud])),
     tradeable,
+    forceBuyHalt: halted,
   });
   notes.push(...plan.notes);
 
   for (const o of plan.orders) {
     const p = priced[o.symbol];
-    await tx.insert(trades).values({
+    const [committedTrade] = await tx.insert(trades).values({
       runId, snapshotId: p.snapshotId, executedAt: now, symbol: o.symbol, side: o.side, shares: o.shares,
       priceAud: o.priceAud, valueAud: o.valueAud, priceNative: p.priceNative, currency: p.currency,
       fxRate: p.fxRate, quoteTime: p.quoteTime, rule: o.rule, cashAfter: o.cashAfter, equityAtTrade: o.equityBefore,
-    });
+    }).returning();
+    await enqueue(tx, `trade:${committedTrade.id}`, "trade", tradePayload(committedTrade, acct.startingCapital));
     await tx.insert(positions).values({ symbol: o.symbol, shares: o.sharesAfter, costBasisAud: o.costBasisAfter, updatedAt: now })
       .onConflictDoUpdate({ target: positions.symbol, set: { shares: o.sharesAfter, costBasisAud: o.costBasisAfter, updatedAt: now } });
   }
@@ -239,7 +259,7 @@ export async function applyMarketData(
     const e = plan.equity;
     await tx.insert(equitySnapshots).values({
       runId, recordedAt: now, cash: plan.cash, positionsValue: round(e - plan.cash, 2), equity: round(e, 2),
-      profitLoss: round(e - acct.startingCapital, 2), buysHalted: e <= BUY_HALT_EQUITY,
+      profitLoss: round(e - acct.startingCapital, 2), buysHalted: halted || e <= BUY_HALT_EQUITY,
     });
   }
 

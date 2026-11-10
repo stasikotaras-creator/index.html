@@ -1,7 +1,7 @@
 import type { Config, Context } from "@netlify/functions";
 import { desc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db/index.js";
-import { account, positions, trades, equitySnapshots, fetchRuns } from "../../db/schema.js";
+import { account, positions, trades, equitySnapshots, fetchRuns, riskState } from "../../db/schema.js";
 import {
   STOCKS, START_CAPITAL, MAX_ALLOCATION, TARGET_ALLOCATION, MIN_CASH_RESERVE, BUY_HALT_EQUITY,
   REFRESH_INTERVAL_MIN, SCHEDULE_CRON, latestPrices, autoTradingEnabled,
@@ -33,6 +33,7 @@ async function buildDashboard(req: Request, deployContext: string | null) {
       .orderBy(desc(fetchRuns.startedAt)).limit(1),
     db.select().from(fetchRuns).where(eq(fetchRuns.trigger, "schedule")).orderBy(desc(fetchRuns.startedAt)).limit(1),
   ]);
+  const [risk] = await db.select().from(riskState).where(eq(riskState.id, 1));
   const quoteTimes = Object.values(prices).map((p) => p.quoteTime).sort();
   const fetchTimes = Object.values(prices).map((p) => p.fetchedAt).sort();
   const acct = acctRows[0];
@@ -53,7 +54,7 @@ async function buildDashboard(req: Request, deployContext: string | null) {
       minCashReserve: MIN_CASH_RESERVE, buyHaltEquity: BUY_HALT_EQUITY, refreshIntervalMin: REFRESH_INTERVAL_MIN,
     },
     account: { cash, startingCapital: acct?.startingCapital ?? START_CAPITAL, equity, positionsValue,
-      profitLoss: equity - (acct?.startingCapital ?? START_CAPITAL), buysHalted: equity <= BUY_HALT_EQUITY },
+      profitLoss: equity - (acct?.startingCapital ?? START_CAPITAL), buysHalted: Boolean(risk?.halted) || equity <= BUY_HALT_EQUITY },
     stocks: STOCKS.map((s) => ({ ...s, shares: shares[s.symbol] ?? 0,
       costBasisAud: posRows.find((p) => p.symbol === s.symbol)?.costBasisAud ?? 0, price: prices[s.symbol] ?? null })),
     trades: tradeRows,

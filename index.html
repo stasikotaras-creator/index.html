@@ -5,6 +5,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>REVEL TradeGuard</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/assets/icon-192.png">
+<meta name="theme-color" content="#0c1420">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <style>
 :root {
   color-scheme:dark;
@@ -136,6 +140,10 @@ footer{
 .market-bottom{border-top:1px solid var(--line);padding-top:10px;font-size:10px;color:var(--muted);align-items:start}
 .market-bottom a{color:var(--gold);white-space:nowrap;text-underline-offset:3px}
 @media(max-width:480px){.market-body{grid-template-columns:1fr;gap:12px}.market-times{border-left:0;padding:12px 0 0;border-top:1px solid var(--line)}.market-bottom{flex-wrap:wrap}.market-countdown{font-size:30px}}
+#notifications input{display:block;width:100%;padding:12px;margin:6px 0 14px;background:var(--bg);color:inherit;border:1px solid var(--line);border-radius:6px}
+#notifications button{margin:4px 4px 4px 0;min-height:44px}
+#push-history{padding-left:20px;max-height:320px;overflow:auto;line-height:1.7}
+#push-status{color:var(--gold)}
 </style>
 </head>
 <body>
@@ -317,6 +325,25 @@ Prices refresh every 15 minutes on weekdays.
 <button id="export">Export Ledger JSON</button>
 </div>
 
+<section class="card" id="notifications" aria-labelledby="notifications-title">
+<h2 id="notifications-title">Notifications</h2>
+<p class="note">Owner-only paper-trade alerts. On iPhone (iOS 16.4+), open in Safari, tap Share → Add to Home Screen, then open REVEL TradeGuard from your Home Screen and sign in to enable notifications.</p>
+<div id="push-login">
+<label>Owner email <input id="push-email" type="email" autocomplete="email"></label>
+<label>Password <input id="push-password" type="password" autocomplete="current-password" minlength="12"></label>
+<button id="push-signin">Sign in</button> <button id="push-signup" hidden>Create owner account</button> <button id="push-recover">Reset password</button>
+</div>
+<div id="push-controls" hidden>
+<button id="push-enable">Enable Notifications</button>
+<button id="push-test" disabled>Send Test Notification</button>
+<button id="push-disable">Revoke All Devices</button>
+<button id="push-refresh">Refresh History &amp; Retry</button>
+<button id="push-logout">Sign out</button>
+<p class="note">The test sends a labelled synthetic BUY without changing the portfolio. Risk alerts halt new simulated purchases at verified equity of A$2,500 or below. Preview retries run when refreshing this section; automatic scheduled retries operate on a published deploy.</p>
+<h3>Notification history</h3><ul id="push-history"></ul>
+</div>
+<p id="push-status" role="status" aria-live="polite">Loading notification settings…</p>
+</section>
 <footer>
 REVEL TradeGuard · A$5,000 virtual starting capital.
 Simulated paper trading only. Not connected to any broker
@@ -705,5 +732,6 @@ load();
 setInterval(load,60000);
 setInterval(render,30000);
 </script>
+<script type="module" src="/assets/notifications.bundle.js"></script>
 </body>
 </html>

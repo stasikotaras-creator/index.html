@@ -1,3 +1,4 @@
+import { drain } from "../../lib/notifications.js";
 import type { Config } from "@netlify/functions";
 import { runCycle } from "../../lib/simulation.js";
 
@@ -6,6 +7,7 @@ import { runCycle } from "../../lib/simulation.js";
 export default async () => {
   try {
     const result = await runCycle("schedule");
+    await drain();
     console.log("scheduled price run", JSON.stringify(result));
   } catch (err) {
     console.error("scheduled price run failed", err);
