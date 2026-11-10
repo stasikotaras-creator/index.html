@@ -244,8 +244,6 @@ export async function applyMarketData(
     (priced[s.symbol] && ageMin(priced[s.symbol].quoteTime, now) >= -1 &&
       ageMin(priced[s.symbol].quoteTime, now) <= MAX_TRADE_QUOTE_AGE_MIN &&
       ageMin(priced[s.symbol].fxTime, now) >= -1 && ageMin(priced[s.symbol].fxTime, now) <= MAX_TRADE_FX_AGE_MIN));
-  if (!heldValuationsFresh) for (const s of STOCKS)
-    tradeable[s.symbol] = { blocked: `${s.symbol}: held portfolio valuations are not all fresh; risk limits cannot be verified.` };
   const evidenceRows = await tx.select().from(investmentEvidence).orderBy(desc(investmentEvidence.id));
   const scores = Object.fromEntries(STOCKS.map(s => [s.symbol, scoreEvidence(
     evidenceRows.find((r: any) => r.symbol === s.symbol && new Date(r.recordedAt) <= now)?.evidence, now)]));

@@ -101,11 +101,12 @@ export function planOrders(input: PlanInput): PlanResult {
     const e = equity();
     const average = sharesOf(s) > 0 ? (cost[s] ?? 0) / sharesOf(s) : 0;
     const score = input.scores?.[s];
-    const exit = sharesOf(s) > 0 && score?.complete && (score.total! <= 35 ||
-      (average > 0 && (priceOf(s)! >= average * 1.15 || priceOf(s)! <= average * .92)));
+    const stop = sharesOf(s) > 0 && Number.isFinite(average) && average > 0 && priceOf(s)! <= average * .92;
+    const exit = stop || (sharesOf(s) > 0 && score?.complete && (score.total! <= 35 ||
+      (average > 0 && priceOf(s)! >= average * 1.15)));
     if (valueOf(s) <= e * MAX_ALLOCATION + 0.005 && !exit) continue;
     const exitReason = exit
-      ? `60/40 exit: ${score!.total! <= 35 ? `score ${score!.total} <=35` : priceOf(s)! >= average * 1.15 ? `profit target reached: AUD ${priceOf(s)} >= ${round(average * 1.15, 4)}` : `stop reached: AUD ${priceOf(s)} <= ${round(average * .92, 4)}`}`
+      ? stop ? `Risk stop reached: AUD ${priceOf(s)} <= ${round(average * .92, 4)} (-8% from remaining average cost).` : `60/40 exit: ${score!.total! <= 35 ? `score ${score!.total} <=35` : priceOf(s)! >= average * 1.15 ? `profit target reached: AUD ${priceOf(s)} >= ${round(average * 1.15, 4)}` : `stop reached: AUD ${priceOf(s)} <= ${round(average * .92, 4)}`}`
       : `Risk trim: allocation ${(valueOf(s) / e * 100).toFixed(4)}% exceeds 20%; reduce to 14% sizing target.`;
     decisionOf(s).sellConditionReached = true;
     const why = blocked(s);

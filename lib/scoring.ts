@@ -1,5 +1,6 @@
 // Versioned, point-in-time rubric. Inputs are source-linked facts, never model-generated scores.
 export type Evidence = {
+  provenance?: { input: import("./edgar.js").EdgarInput; financialAccession: string; financialPeriod: string; market: { return90dPct: number; sourceUrl: string; publishedAt: string } };
   publishedAt: string; capturedAt: string; expiresAt: string; sourceUrl: string;
   institutional: { investor: string; performanceSourceUrl: string; performancePublishedAt: string;
     years: number; annualReturn: number; benchmarkReturn: number; holdingChangePct: number };

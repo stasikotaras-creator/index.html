@@ -130,3 +130,16 @@ test("repeated cycles at constant test prices stay within all limits", () => {
     state = { ...state, cash: r.cash, shares: r.shares, costBasis: r.costBasis };
   }
 });
+
+test('independent stop boundary and quote guard with missing evidence', () => {
+  for (const price of [92, 91, 92.01]) {
+    const input = scenario({ symbols: ['LMT'], scores: {}, cash: 4000, shares: { LMT: 5 },
+      costBasis: { LMT: 500 }, valuationPrices: { LMT: price }, tradeable: { LMT: { priceAud: price } } });
+    const plan = planOrders(input);
+    assert.equal(plan.orders.length, price <= 92 ? 1 : 0);
+    if (price <= 92) { assert.equal(plan.orders[0].side, 'SELL'); assert.equal(plan.shares.LMT, 0); }
+    const blockedPlan = planOrders({ ...input, tradeable: { LMT: { blocked: 'stale quote' } } });
+    assert.equal(blockedPlan.orders.length, 0);
+    if (price <= 92) assert.equal(blockedPlan.decisions[0].rejectedOrder, 'SELL');
+  }
+});

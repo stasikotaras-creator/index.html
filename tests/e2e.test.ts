@@ -307,3 +307,32 @@ test('future quotes and FX cannot execute paper trades and rejection is persiste
   const [run] = await db.select().from(fetchRuns);
   assert.ok(run.evaluation!.stocks.every(d => d.rejectedOrder === 'BUY' && d.reason.includes('future-dated')));
 });
+
+test('safety: missing investor evidence cannot block -8% stops; stale unrelated holding only blocks buys', async () => {
+  const db = await freshDb();
+  const now = new Date('2026-11-10T15:00:00Z');
+  const p = stubProvider(() => ({ quoteTime: now }));
+  await runCycle('test', deps(db, p.fetchImpl, now));
+  const originalTrades = await db.select().from(trades);
+  await db.delete(schema.investmentEvidence);
+  const later = new Date(now.getTime() + min(15));
+  const fresh = stubProvider(() => ({ quoteTime: later }));
+  const crash = (async (url: any) => {
+    const res = await fresh.fetchImpl(url);
+    if (!String(url).includes('/quote')) return res;
+    const body = await res.json();
+    body.LMT.close = String(BASE_USD.LMT * .90);
+    body.GD.timestamp = body.GD.last_quote_at = Math.floor(now.getTime() / 1000) - 3600;
+    return Response.json(body);
+  }) as typeof fetch;
+  const result = await runCycle('schedule', deps(db, crash, later));
+  const fills = await db.select().from(trades).where(eq(trades.runId, result.runId!));
+  assert.equal(fills.length, 1);
+  assert.equal(fills[0].side, 'SELL');
+  assert.equal(fills[0].symbol, 'LMT');
+  assert.match(fills[0].rule, /Risk stop/);
+  assert.deepEqual((await db.select().from(trades)).slice(0, originalTrades.length), originalTrades);
+  const [run] = await db.select().from(fetchRuns).where(eq(fetchRuns.id, result.runId!));
+  assert.equal(run.evaluation!.stocks.length, 5);
+  assert.equal(run.evaluation!.stocks.find(d => d.symbol === 'LMT')!.score!.complete, false);
+});
