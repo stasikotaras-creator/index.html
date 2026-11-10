@@ -224,3 +224,32 @@ test("e2e: pause switch records prices but places no orders", async () => {
   assert.equal((await db.select().from(trades)).length, 0);
   assert.ok(res.notes!.every((n) => n.includes("paused")));
 });
+
+test('evaluation: four funded positions HOLD while stale BAE is rejected with persisted evidence', async () => {
+  const db = await freshDb();
+  const t0 = new Date('2026-11-10T15:00:00Z');
+  const staleProvider = (async (url: string) => {
+    if (String(url).includes('/quote')) {
+      return Response.json(Object.fromEntries(Object.entries(BASE_USD).map(([symbol, close]) => [symbol, {
+        close, currency: 'USD', exchange: 'TEST', is_market_open: true,
+        timestamp: Math.floor(t0.getTime() / 1000) - (symbol === 'BAESY' ? 86400 : 0),
+      }])));
+    }
+    return Response.json({ rate: FX, timestamp: Math.floor(t0.getTime() / 1000) });
+  }) as typeof fetch;
+  await runCycle('test', deps(db, staleProvider, t0));
+  const t1 = new Date(t0.getTime() + min(15));
+  await runCycle('schedule', deps(db, staleProvider, t1));
+  const runs = await db.select().from(fetchRuns).orderBy(fetchRuns.id);
+  const evaluation = runs.at(-1)!.evaluation!;
+  assert.equal(evaluation.evaluatedAt, t1.toISOString());
+  assert.equal(evaluation.stocks.length, 5);
+  assert.equal(evaluation.scoring.implemented, false);
+  for (const d of evaluation.stocks) {
+    assert.equal(d.decision, 'HOLD');
+    assert.equal(d.buyEligible, false);
+    assert.equal(d.sellConditionReached, false);
+    assert.match(d.reason, d.symbol === 'BAE' ? /quote is 1455 min old/ : /below A\$25.00 minimum/);
+  }
+  assert.equal((await db.select().from(trades)).length, 4);
+});

@@ -25,6 +25,7 @@ export const fetchRuns = pgTable("fetch_runs", {
   status: text().notNull(),
   message: text(),
   notes: jsonb().$type<string[]>(),
+  evaluation: jsonb().$type<import("../lib/evaluation.js").TradingEvaluation>(),
   startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
 }, (t) => [index("fetch_runs_started_idx").on(t.startedAt)]);
