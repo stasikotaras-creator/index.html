@@ -115,3 +115,10 @@ export const notificationDeliveries = pgTable("notification_deliveries", {
 export const riskState = pgTable("risk_state", {
   id: integer().primaryKey(), incidentId: text("incident_id"), halted: boolean().notNull().default(false),
 });
+
+// Append-only, source-verified evidence captured before use; no fabricated defaults.
+export const investmentEvidence = pgTable("investment_evidence", {
+  id: serial().primaryKey(), symbol: text().notNull(),
+  evidence: jsonb().$type<import("../lib/scoring.js").Evidence>().notNull(),
+  recordedAt: timestamp("recorded_at", { withTimezone: true }).defaultNow().notNull(),
+});

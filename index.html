@@ -216,7 +216,7 @@ footer{
 <section class="card" aria-labelledby="evaluationTitle">
 <h2 id="evaluationTitle">Last Trading Evaluation</h2>
 <p class="note" id="evaluationTime">Awaiting a recorded evaluation.</p>
-<p class="note">Strategy: 14% equal-weight target · 20% stock limit · 30% cash reserve. The 60/40 investment scoring model is not implemented; institutional data is unavailable and no investment score is calculated.</p>
+<p class="note">Strategy: 60% documented successful-investor behaviour + 40% independent analysis. Missing verified evidence means an incomplete score and no strategy trade. Sizing: 14% target · 20% stock limit · 30% cash reserve.</p>
 <div id="evaluationStocks" aria-live="polite"></div>
 <p class="note" id="evaluationNotes"></p>
 </section>
@@ -565,7 +565,7 @@ function renderInner(){
 
  const evaluation=data.lastTradingEvaluation;
  $('evaluationTime').textContent=data.offline?'Evaluation unavailable while disconnected.':
-  evaluation?`Evaluated ${when(evaluation.evaluatedAt)} · ${data.lastRun?.trigger||'backend'} · run ${data.lastRun?.id??'—'}`:
+  evaluation?`Evaluated ${when(evaluation.evaluatedAt)} · ${data.evaluationRun?.trigger||'backend'} · run ${data.evaluationRun?.id??'—'}`:
   data.evaluationUnavailableReason||'No persisted evaluation yet.';
  $('evaluationStocks').innerHTML=data.offline||!evaluation?'':evaluation.stocks.map(d=>`
   <div style="padding:12px 0;border-bottom:1px solid var(--line)">
@@ -573,10 +573,15 @@ function renderInner(){
   <p class="note" style="margin:5px 0">${esc(d.reason)}</p>
   <div class="note">Position at evaluation: ${esc(d.shares)} shares · Allocation: ${d.allocation===null?'unavailable':(d.allocation*100).toFixed(2)+'%'}<br>
   Latest verified quote: ${d.quoteTime?esc(when(d.quoteTime)):'unavailable'}<br>
+  Score: ${d.score?.complete?esc(d.score.total)+'/100':'incomplete'} · ${esc(d.score?.reason||'No recorded score')}<br>
+  Profit target (AUD/share): ${d.profitTargetAud?fmt(d.profitTargetAud):'no position'} · Stop: ${d.stopLossAud?fmt(d.stopLossAud):'no position'}<br>
+  Exit: ${esc(d.exitConditions||'See recorded strategy')}<br>
+  Next trade: ${esc(d.nextTradeConditions||'See recorded strategy')}<br>
+  ${d.rejectedOrder?'Rejected '+esc(d.rejectedOrder)+' order<br>':''}
   Purchase eligible: ${d.buyEligible?'yes':'no'} · Sell condition reached: ${d.sellConditionReached?'yes':'no'}</div>
   </div>`).join('');
  $('evaluationNotes').textContent=data.offline?'':data.lastRun?.status==='error'?
-  `Latest cycle failed: ${data.lastRun.message||'unknown error'}. No completed evaluation is available for this cycle.`:
+  `Latest cycle failed: ${data.lastRun.message||'unknown error'}. The recorded evaluation includes the failure reason.`:
   (data.lastRun?.notes||[]).join(' ');
  renderSystemStatus();
 

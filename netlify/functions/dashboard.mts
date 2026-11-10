@@ -1,10 +1,10 @@
 import type { Config, Context } from "@netlify/functions";
-import { desc, eq, inArray } from "drizzle-orm";
+import { desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { account, positions, trades, equitySnapshots, fetchRuns, riskState } from "../../db/schema.js";
 import {
   STOCKS, START_CAPITAL, MAX_ALLOCATION, TARGET_ALLOCATION, MIN_CASH_RESERVE, BUY_HALT_EQUITY,
-  REFRESH_INTERVAL_MIN, SCHEDULE_CRON, latestPrices, autoTradingEnabled,
+  REFRESH_INTERVAL_MIN, SCHEDULE_CRON, latestPrices, autoTradingEnabled, runtimeEnv,
 } from "../../lib/simulation.js";
 
 export default async (req: Request, context: Context) => {
@@ -33,6 +33,7 @@ async function buildDashboard(req: Request, deployContext: string | null) {
       .orderBy(desc(fetchRuns.startedAt)).limit(1),
     db.select().from(fetchRuns).where(eq(fetchRuns.trigger, "schedule")).orderBy(desc(fetchRuns.startedAt)).limit(1),
   ]);
+  const [lastEvaluated] = await db.select().from(fetchRuns).where(isNotNull(fetchRuns.evaluation)).orderBy(desc(fetchRuns.startedAt)).limit(1);
   const [risk] = await db.select().from(riskState).where(eq(riskState.id, 1));
   const quoteTimes = Object.values(prices).map((p) => p.quoteTime).sort();
   const fetchTimes = Object.values(prices).map((p) => p.fetchedAt).sort();
@@ -46,7 +47,7 @@ async function buildDashboard(req: Request, deployContext: string | null) {
   return Response.json({
     serverTime: new Date().toISOString(),
     initialized: Boolean(acct),
-    providerConfigured: Boolean(process.env.TWELVE_DATA_API_KEY),
+    providerConfigured: Boolean(runtimeEnv("TWELVE_DATA_API_KEY")),
     autoTrading: autoTradingEnabled(),
     deployContext,
     rules: {
@@ -59,7 +60,8 @@ async function buildDashboard(req: Request, deployContext: string | null) {
       costBasisAud: posRows.find((p) => p.symbol === s.symbol)?.costBasisAud ?? 0, price: prices[s.symbol] ?? null })),
     trades: tradeRows,
     equityHistory: history.reverse(),
-    lastTradingEvaluation: runs[0]?.evaluation ?? null,
+    lastTradingEvaluation: lastEvaluated?.evaluation ?? null,
+    evaluationRun: lastEvaluated ? { id: lastEvaluated.id, trigger: lastEvaluated.trigger } : null,
     evaluationUnavailableReason: runs[0]?.evaluation ? null : "This refresh has no persisted trading evaluation. Historical HOLD decisions were not recorded; the next completed trading cycle records all five decisions.",
     lastRun: runs[0] ?? null,
     lastSuccessfulRun: okRuns[0] ?? null,
