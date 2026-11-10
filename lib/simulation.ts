@@ -3,9 +3,10 @@
 import { sql, eq, desc, and, gte, inArray } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
-  account, positions, fetchRuns, priceSnapshots, trades, equitySnapshots, riskState,
+  account, positions, fetchRuns, priceSnapshots, trades, equitySnapshots, riskState, investmentEvidence,
 } from "../db/schema.js";
 
+import { scoreEvidence } from "./scoring.js";
 import { describeEvaluation } from "./evaluation.js";
 import { enqueue, tradePayload, randomUUID } from "./notifications.js";
 import {
@@ -35,7 +36,10 @@ export const STOCKS = [
 
 // Autonomous simulated trading is ON unless PAPER_TRADING_ENABLED is explicitly "false" (emergency pause:
 // prices are still recorded, but no simulated orders are placed). Real-money trading does not exist here.
-export const autoTradingEnabled = () => process.env.PAPER_TRADING_ENABLED?.trim().toLowerCase() !== "false";
+// Netlify runtime environment; process fallback supports isolated Node tests.
+export const runtimeEnv = (name: string): string | undefined =>
+  (globalThis as any).Netlify?.env?.get(name) ?? process.env[name];
+export const autoTradingEnabled = () => runtimeEnv('PAPER_TRADING_ENABLED')?.trim().toLowerCase() !== "false";
 export const REAL_MONEY_TRADING = false as const;
 
 const SOURCE = "Twelve Data";
@@ -55,7 +59,7 @@ async function getJson(url: string, fetchImpl: FetchFn = fetch) {
   const res = await fetchImpl(url, { headers: { accept: "application/json" } });
   const body = await res.json().catch(() => null);
   if (!res.ok || !body) throw new Error(`Provider HTTP ${res.status}`);
-  if (body.status === "error") throw new Error(`Provider: ${body.message ?? "error"}`);
+  if (body.status === "error") throw new Error("Market data provider rejected the request.");
   return body;
 }
 
@@ -66,7 +70,7 @@ async function fetchQuotes(key: string, notes: string[], fetchImpl: FetchFn): Pr
   for (const s of STOCKS) {
     const q = body[s.providerSymbol];
     if (!q || q.status === "error") {
-      notes.push(`${s.symbol}: no verified quote (${q?.message ?? "missing from response"}).`);
+      notes.push(`${s.symbol}: no verified quote (${q ? "provider rejected quote" : "missing from response"}).`);
       continue;
     }
     const price = Number(q.close);
@@ -120,12 +124,13 @@ export type CycleDeps = { conn?: any; fetchImpl?: FetchFn; apiKey?: string; now?
 export async function runCycle(trigger: "schedule" | "dashboard" | "manual" | "test", deps: CycleDeps = {}): Promise<RunResult> {
   const conn = deps.conn ?? db;
   const fetchImpl = deps.fetchImpl ?? fetch;
-  const key = deps.apiKey ?? process.env.TWELVE_DATA_API_KEY;
-  if (!key) return { ran: false, reason: "Market data provider is not configured." };
+  const key = deps.apiKey ?? runtimeEnv("TWELVE_DATA_API_KEY");
 
   return conn.transaction(async (tx: any) => {
     // One refresh at a time across all function instances.
-    const lock = await tx.execute(sql`select pg_try_advisory_xact_lock(${LOCK_KEY}) as ok`);
+    const lock = trigger === "schedule"
+      ? await tx.execute(sql`select pg_advisory_xact_lock(${LOCK_KEY}), true as ok`)
+      : await tx.execute(sql`select pg_try_advisory_xact_lock(${LOCK_KEY}) as ok`);
     const lockRows = ((lock as any).rows ?? lock) as Array<{ ok: boolean }>;
     if (!lockRows[0]?.ok) return { ran: false, reason: "Another refresh is in progress." };
 
@@ -134,7 +139,7 @@ export async function runCycle(trigger: "schedule" | "dashboard" | "manual" | "t
     // Scheduled runs use a shorter throttle so a dashboard-triggered refresh a few minutes earlier
     // never causes the 15-minute schedule to skip a cycle.
     const minGap = trigger === "schedule" ? SCHEDULED_MIN_GAP_MIN : REFRESH_INTERVAL_MIN;
-    if (last && ageMin(last.startedAt, now) < minGap) {
+    if (trigger !== "schedule" && last && ageMin(last.startedAt, now) < minGap) {
       return { ran: false, reason: "Prices were refreshed recently.", runId: last.id };
     }
 
@@ -145,15 +150,17 @@ export async function runCycle(trigger: "schedule" | "dashboard" | "manual" | "t
     let quotes: Quote[] = [];
     let fx: Awaited<ReturnType<typeof fetchFx>> = {};
     try {
+      if (!key) throw new Error("Market data provider is not configured.");
       quotes = await fetchQuotes(key, notes, fetchImpl);
       fx = await fetchFx(key, [...new Set(quotes.map((q) => q.currency))], fetchImpl);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      await tx.update(fetchRuns).set({ status: "error", message: msg, notes, finishedAt: new Date() }).where(eq(fetchRuns.id, run.id));
-      return { ran: true, runId: run.id, status: "error", notes: [msg, ...notes] };
+      const evaluated = await applyMarketData(tx, run.id, [], {}, [msg, ...notes], now, deps.source ?? SOURCE);
+      await tx.update(fetchRuns).set({ status: "error", message: msg }).where(eq(fetchRuns.id, run.id));
+      return { ...evaluated, status: "error" };
     }
 
-    return applyMarketData(tx, run.id, quotes, fx, notes, now, deps.source ?? SOURCE);
+    return applyMarketData(tx, run.id, quotes, fx, notes, deps.now?.() ?? new Date(), deps.source ?? SOURCE);
   });
 }
 
@@ -169,7 +176,7 @@ export async function applyMarketData(
   const priced: Record<string, Priced> = {};
   for (const q of quotes) {
     const r = fx[q.currency];
-    if (!r) { notes.push(`${q.symbol}: no ${q.currency}/AUD rate, price not recorded.`); continue; }
+    if (!r || !Number.isFinite(r.rate) || r.rate <= 0 || !Number.isFinite(q.priceNative) || q.priceNative <= 0 || !Number.isFinite(q.quoteTime.getTime()) || !Number.isFinite(r.time.getTime())) { notes.push(`${q.symbol}: no ${q.currency}/AUD rate, price not recorded.`); continue; }
     const priceAud = q.priceNative * r.rate;
     const [snap] = await tx.insert(priceSnapshots).values({
       runId, symbol: q.symbol, providerSymbol: q.providerSymbol, exchange: q.exchange,
@@ -209,6 +216,7 @@ export async function applyMarketData(
       !tradingEnabled ? { blocked: `${s.symbol}: autonomous paper trading is paused, no simulated trade.` }
       : usedQuote.has(s.symbol) ? { blocked: `${s.symbol}: quote already used for a simulated order, no duplicate trade.` }
       : !p.marketOpen ? { blocked: `${s.symbol}: market closed, no simulated trade.` }
+      : quoteAge < -1 || ageMin(p.fxTime, now) < -1 ? { blocked: `${s.symbol}: future-dated quote or FX, no simulated trade.` }
       : quoteAge > MAX_TRADE_QUOTE_AGE_MIN ? { blocked: `${s.symbol}: quote is ${Math.round(quoteAge)} min old, no simulated trade.` }
       : p.currency !== "AUD" && ageMin(p.fxTime, now) > MAX_TRADE_FX_AGE_MIN ? { blocked: `${s.symbol}: FX rate is stale, no simulated trade.` }
       : { priceAud: p.priceAud };
@@ -231,14 +239,25 @@ export async function applyMarketData(
       await tx.update(riskState).set({ halted: true, incidentId }).where(eq(riskState.id, 1));
     } else if (!halted && risk.halted) await tx.update(riskState).set({ halted: false, incidentId: null }).where(eq(riskState.id, 1));
   }
+  // Missing/stale held valuations cannot safely authorize any new purchase.
+  const heldValuationsFresh = STOCKS.every(s => !(shares[s.symbol] > 0) ||
+    (priced[s.symbol] && ageMin(priced[s.symbol].quoteTime, now) >= -1 &&
+      ageMin(priced[s.symbol].quoteTime, now) <= MAX_TRADE_QUOTE_AGE_MIN &&
+      ageMin(priced[s.symbol].fxTime, now) >= -1 && ageMin(priced[s.symbol].fxTime, now) <= MAX_TRADE_FX_AGE_MIN));
+  if (!heldValuationsFresh) for (const s of STOCKS)
+    tradeable[s.symbol] = { blocked: `${s.symbol}: held portfolio valuations are not all fresh; risk limits cannot be verified.` };
+  const evidenceRows = await tx.select().from(investmentEvidence).orderBy(desc(investmentEvidence.id));
+  const scores = Object.fromEntries(STOCKS.map(s => [s.symbol, scoreEvidence(
+    evidenceRows.find((r: any) => r.symbol === s.symbol && new Date(r.recordedAt) <= now)?.evidence, now)]));
   const planInput = {
+    scores,
     symbols: STOCKS.map((s) => s.symbol),
     cash: acct.cash,
     shares,
     costBasis,
     valuationPrices: Object.fromEntries(STOCKS.map((s) => [s.symbol, latest[s.symbol]?.priceAud])),
     tradeable,
-    forceBuyHalt: halted,
+    forceBuyHalt: halted || !heldValuationsFresh,
   };
   const plan = planOrders(planInput);
   const evaluation = describeEvaluation(planInput, plan, now,

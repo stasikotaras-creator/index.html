@@ -1,3 +1,4 @@
+import { evidence } from "./evidence-fixture.js";
 // Isolated persistence test for the paper-trading engine.
 // Runs the real engine write path (applyMarketData) against a throwaway in-memory Postgres (PGlite)
 // built from this repo's migration SQL. It never connects to the Netlify production or preview
@@ -26,6 +27,8 @@ async function freshDb() {
     for (const stmt of sqlText.split("--> statement-breakpoint")) if (stmt.trim()) await pg.exec(stmt);
   }
   const db = drizzle({ client: pg, schema });
+  await db.insert(schema.investmentEvidence).values(STOCKS.map(s => ({ symbol: s.symbol, evidence, recordedAt: new Date('2026-11-01') })));
+
   await db.insert(account).values({ id: 1, startingCapital: START_CAPITAL, cash: START_CAPITAL });
   return db;
 }

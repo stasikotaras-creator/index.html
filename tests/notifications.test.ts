@@ -1,3 +1,4 @@
+import { evidence } from "./evidence-fixture.js";
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -11,6 +12,7 @@ async function fixture() {
   const pg = new PGlite();
   for (const name of readdirSync('netlify/database/migrations').sort()) await pg.exec(readFileSync(`netlify/database/migrations/${name}/migration.sql`, 'utf8'));
   const db = drizzle({ client: pg, schema });
+  await db.insert(schema.investmentEvidence).values(STOCKS.map(s => ({ symbol: s.symbol, evidence, recordedAt: new Date('2026-11-01') })));
   await db.insert(schema.pushSubscriptions).values({ id: 'device', ownerId: 'owner', endpoint: 'https://web.push.apple.com/test', subscription: { endpoint: 'https://web.push.apple.com/test', keys: {} } });
   return { db, pg };
 }

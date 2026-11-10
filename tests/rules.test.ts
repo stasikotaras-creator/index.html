@@ -1,3 +1,4 @@
+import { testScores } from "./evidence-fixture.js";
 // Isolated paper-order tests for the REVEL TradeGuard risk rules.
 // Uses TEST DATA ONLY: the prices below are synthetic round numbers chosen to exercise the rules.
 // They are not market prices and are never written anywhere. No database or network access.
@@ -16,7 +17,7 @@ const open = (prices: Record<string, number>) =>
 
 function scenario(over: Partial<PlanInput>): PlanInput {
   return {
-    symbols: SYMBOLS, cash: START_CAPITAL, shares: {}, valuationPrices: TEST_PRICE,
+    scores: testScores, symbols: SYMBOLS, cash: START_CAPITAL, shares: {}, valuationPrices: TEST_PRICE,
     tradeable: open(TEST_PRICE), ...over,
   };
 }

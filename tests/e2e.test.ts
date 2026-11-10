@@ -1,3 +1,4 @@
+import { evidence } from "./evidence-fixture.js";
 // Isolated END-TO-END test of the autonomous paper-trading cycle.
 // Runs the real runCycle() path (lock, throttle, provider parsing, FX conversion, risk rules, simulated
 // fills, ledger) against a throwaway in-memory Postgres (PGlite) built from this repo's migrations.
@@ -28,7 +29,9 @@ async function freshDb() {
     const sqlText = readFileSync(`${dir}/${m}/migration.sql`, "utf8");
     for (const stmt of sqlText.split("--> statement-breakpoint")) if (stmt.trim()) await pg.exec(stmt);
   }
-  return drizzle({ client: pg, schema });
+  const db = drizzle({ client: pg, schema });
+  await db.insert(schema.investmentEvidence).values(STOCKS.map(s => ({ symbol: s.symbol, evidence, recordedAt: new Date('2026-11-01') })));
+  return db;
 }
 
 type Market = { quoteTime: Date; open?: boolean; scale?: number; fail?: boolean };
@@ -201,6 +204,7 @@ test("e2e: sells happen automatically, buys halt at A$2,500 and the halt is reco
   const sells = (await db.select().from(trades).where(eq(trades.runId, r2.runId!))).filter((t) => t.side === "SELL");
   assert.ok(sells.some((t) => t.symbol === "LMT"), "LMT trimmed automatically");
   await assertLimits(db);
+  await db.update(account).set({ cash: 1000 }).where(eq(account.id, 1)); // synthetic withdrawal ensures halt boundary despite realised rally gains
   // Synthetic crash -> equity at or below A$2,500 -> buys halted.
   m = { quoteTime: new Date(t0.getTime() + min(31)), scale: 0.05 };
   const r3 = await runCycle("schedule", deps(db, p.fetchImpl, new Date(t0.getTime() + min(32))));
@@ -244,12 +248,62 @@ test('evaluation: four funded positions HOLD while stale BAE is rejected with pe
   const evaluation = runs.at(-1)!.evaluation!;
   assert.equal(evaluation.evaluatedAt, t1.toISOString());
   assert.equal(evaluation.stocks.length, 5);
-  assert.equal(evaluation.scoring.implemented, false);
+  assert.equal(evaluation.scoring.implemented, true);
   for (const d of evaluation.stocks) {
     assert.equal(d.decision, 'HOLD');
     assert.equal(d.buyEligible, false);
     assert.equal(d.sellConditionReached, false);
-    assert.match(d.reason, d.symbol === 'BAE' ? /quote is 1455 min old/ : /below A\$25.00 minimum/);
+    assert.match(d.reason, d.symbol === 'BAE' ? /quote is 1455 min old/ : /quote already used/);
   }
   assert.equal((await db.select().from(trades)).length, 4);
+});
+
+test('schedule persists five HOLD decisions during outage and missing configuration', async () => {
+  const db = await freshDb();
+  const now = new Date('2026-11-10T15:00:00Z');
+  const p = stubProvider(() => ({ quoteTime: now, fail: true }));
+  await runCycle('schedule', deps(db, p.fetchImpl, now));
+  await runCycle('schedule', { ...deps(db, p.fetchImpl, now), apiKey: '' });
+  const runs = await db.select().from(fetchRuns);
+  assert.equal(runs.length, 2);
+  for (const run of runs) {
+    assert.equal(run.evaluation?.stocks.length, 5);
+    assert.ok(run.evaluation?.stocks.every(d => d.decision === 'HOLD' && d.reason.includes('no fresh')));
+  }
+});
+
+test('no institutional evidence preserves four existing positions, original ledger and cash', async () => {
+  const db = await freshDb();
+  const now = new Date('2026-11-10T15:00:00Z');
+  const p = stubProvider(() => ({ quoteTime: now }));
+  const initial = (async (url: any) => {
+    const response = await p.fetchImpl(url);
+    if (!String(url).includes('/quote')) return response;
+    const body = await response.json(); body.BAESY.is_market_open = false;
+    return Response.json(body);
+  }) as typeof fetch;
+  await runCycle('test', deps(db, initial, now));
+  // Exactly four original fills in an isolated fixture, never the deployed account.
+  assert.equal((await db.select().from(trades)).length, 4);
+  await db.delete(schema.investmentEvidence);
+  const before = { account: await db.select().from(account), positions: await db.select().from(positions), trades: await db.select().from(trades) };
+  const later = new Date(now.getTime() + min(15));
+  const fresh = stubProvider(() => ({ quoteTime: later }));
+  await runCycle('schedule', deps(db, fresh.fetchImpl, later));
+  const afterAccount = (await db.select().from(account))[0];
+  assert.equal(afterAccount.cash, before.account[0].cash);
+  assert.deepEqual(await db.select().from(positions), before.positions);
+  assert.deepEqual(await db.select().from(trades), before.trades);
+  const runs = await db.select().from(fetchRuns).orderBy(fetchRuns.id);
+  assert.ok(runs.at(-1)!.evaluation!.stocks.every(d => d.score?.total === null && d.decision === 'HOLD'));
+});
+
+test('future quotes and FX cannot execute paper trades and rejection is persisted', async () => {
+  const db = await freshDb();
+  const now = new Date('2026-11-10T15:00:00Z');
+  const p = stubProvider(() => ({ quoteTime: new Date(now.getTime() + min(5)) }));
+  await runCycle('schedule', deps(db, p.fetchImpl, now));
+  assert.equal((await db.select().from(trades)).length, 0);
+  const [run] = await db.select().from(fetchRuns);
+  assert.ok(run.evaluation!.stocks.every(d => d.rejectedOrder === 'BUY' && d.reason.includes('future-dated')));
 });
